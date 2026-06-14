@@ -27,6 +27,11 @@ export CFLAGS="-O2 -pthread -Wno-implicit-function-declaration"
 export CXXFLAGS="-O2 -pthread"
 export LDFLAGS="-pthread"
 
+# emscripten's gethostbyname_r/gethostbyaddr_r have a glibc arity that ei_resolve.c
+# misdetects under cross-configure; force its portable fallback so erl_interface's libei
+# (and the erlc/erl_call that link it) build cleanly instead of erroring out.
+export ac_cv_func_gethostbyname_r=no ac_cv_func_gethostbyaddr_r=no
+
 do_configure() {
   echo "=== [configure] host=wasm32-unknown-emscripten ==="
   emconfigure ./configure \
@@ -56,15 +61,15 @@ do_configure() {
     erl_xcomp_code_model_small=no
 }
 
-# Build the erts emulator AND the library .beams. The library apps (kernel,
+# Build the library .beams AND the erts emulator. The library apps (kernel,
 # stdlib, compiler, syntax_tools, …) are compiled by the host bootstrap erlc into
 # lib/*/ebin — those .beams are architecture-independent and are exactly what the
 # editor bakes into the MEMFS image (so no separate native OTP is needed for them).
-# -k keeps going past the erl_interface/erlc -lei link failure, which is expected
-# and harmless (those native binaries are not used).
+# libs first: erts/etc's erlc/erl_call link erl_interface's libei, so it must exist
+# before the emulator phase (otherwise the -j build races and they fail to link).
 do_emulator() {
-  echo "=== [emulator+libs] building erts + library .beams ==="
-  emmake make emulator libs -k -j"$(nproc)"
+  echo "=== [libs+emulator] building library .beams + erts ==="
+  emmake make libs -j"$(nproc)" && emmake make emulator -j"$(nproc)"
 }
 
 case "$STAGE" in

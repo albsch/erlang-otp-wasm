@@ -1421,8 +1421,10 @@ os_mmap_aligned(UWord size, UWord alignment)
 #  if HAVE_MREMAP
 #    if defined(__NetBSD__)
 #      define ERTS_MREMAP_FLAGS  (0)
-#    else
+#    elif defined(MREMAP_MAYMOVE)
 #      define ERTS_MREMAP_FLAGS  (MREMAP_MAYMOVE)
+#    else
+#      define ERTS_MREMAP_FLAGS  (0)
 #    endif
 #  endif
 static ERTS_INLINE void *

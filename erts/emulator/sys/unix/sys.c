@@ -1134,7 +1134,17 @@ signal_dispatcher_thread_func(void *unused)
         do {
             res = read(sig_notify_fds[0], (void *) &sb.buf[i], sizeof(int) - i);
             i += res > 0 ? res : 0;
-        } while ((i < sizeof(int) && res >= 0) || (res < 0 && errno == EINTR));
+#ifdef __EMSCRIPTEN__
+            /* Emscripten pipes are non-blocking: poll every 50ms instead of
+               aborting on EAGAIN (no real OS signals are delivered here). */
+            if (res < 0 && errno == EAGAIN) usleep(50000);
+#endif
+        } while ((i < sizeof(int) && res >= 0) ||
+                 (res < 0 && (errno == EINTR
+#ifdef __EMSCRIPTEN__
+                              || errno == EAGAIN
+#endif
+                 )));
 
 	if (res < 0) {
 	    erts_exit(ERTS_ABORT_EXIT,
