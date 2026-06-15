@@ -708,7 +708,13 @@ check_for_possibly_long_gc(Process *p, Uint ygen_usage)
         else
             sz += (Uint) len;
     }
-    if (sz >= ERTS_POTENTIALLY_LONG_GC_HSIZE) {
+    if (sz >= ERTS_POTENTIALLY_LONG_GC_HSIZE && erts_no_dirty_cpu_schedulers > 0) {
+        /*
+         * Only defer a long GC to a dirty CPU scheduler when one exists. In the
+         * single-threaded build (erts_no_dirty_cpu_schedulers == 0) there is no
+         * dirty run queue to service it, so fall through and let the GC run
+         * inline on the current (normal) scheduler. See erl_init.c.
+         */
         ASSERT(!(p->flags & (F_DISABLE_GC|F_DELAY_GC)));
 	p->flags |= major ? F_DIRTY_MAJOR_GC : F_DIRTY_MINOR_GC;
         erts_schedule_dirty_sys_execution(p);

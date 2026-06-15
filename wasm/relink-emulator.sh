@@ -42,8 +42,10 @@ if [ -n "$STATIC_NIFS" ]; then
   make_args+=("STATIC_NIFS=${STATIC_NIFS}")
 fi
 
-emmake make "${make_args[@]}" EMU_LDFLAGS="-pthread -sPROXY_TO_PTHREAD \
-  -sPTHREAD_POOL_SIZE=32 -sPTHREAD_POOL_SIZE_STRICT=0 \
+# Single-threaded BEAM: NO -pthread / PROXY_TO_PTHREAD / PTHREAD_POOL_SIZE, so
+# Emscripten builds a non-shared-memory module that needs no SharedArrayBuffer.
+# The emulator runs scheduler 1 on the (worker) main thread; see erts_single_threaded.
+emmake make "${make_args[@]}" EMU_LDFLAGS="\
   -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=${INITIAL_MEMORY} -sSTACK_SIZE=8388608 \
   -sEXIT_RUNTIME=1 -sEMULATE_FUNCTION_POINTER_CASTS=1 \
   -sEXPORTED_RUNTIME_METHODS=callMain,FS,ENV ${EXTRA_LDFLAGS}"

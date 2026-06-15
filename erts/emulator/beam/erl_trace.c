@@ -2911,6 +2911,8 @@ init_sys_msg_dispatcher(void)
     erts_cnd_init(&smq_cnd);
     erts_mtx_init(&smq_mtx, "sys_msg_q", NIL,
         ERTS_LOCK_FLAGS_PROPERTY_STATIC | ERTS_LOCK_FLAGS_CATEGORY_DEBUG);
+    if (erts_single_threaded)
+        return; /* no OS threads in single-threaded mode; see erl_init.c */
     erts_thr_create(&sys_msg_dispatcher_tid,
 			sys_msg_dispatcher_func,
 			NULL,

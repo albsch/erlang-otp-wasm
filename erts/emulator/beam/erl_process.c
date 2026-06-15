@@ -8763,7 +8763,10 @@ sched_thread_func(void *vesdp)
 
     erts_msacc_init_thread("scheduler", no, 1);
 
-    erts_thr_progress_register_managed_thread(esdp, &callbacks, 0, 0);
+    /* In single-threaded mode this lone scheduler is the only managed thread;
+     * register with pref_wakeup so it takes thread-progress id 0 (managed.no==1). */
+    erts_thr_progress_register_managed_thread(esdp, &callbacks,
+                                              erts_single_threaded ? 1 : 0, 0);
 
     if (erts_sched_poll_enabled()) {
         esdp->ssi->psi = erts_create_pollset_thread(-1, NULL);
@@ -8920,7 +8923,7 @@ erts_start_schedulers(void)
 
     opts.name = name;
 
-    if (erts_runq_supervision_interval) {
+    if (!erts_single_threaded && erts_runq_supervision_interval) {
 	opts.suggested_stack_size = 16;
         erts_snprintf(opts.name, sizeof(name), "erts_runq_sup");
 	erts_atomic_init_nob(&runq_supervisor_sleeping, 0);
@@ -8943,6 +8946,8 @@ erts_start_schedulers(void)
     for (ix = 0; ix < erts_no_schedulers; ix++) {
 	ErtsSchedulerData *esdp = ERTS_SCHEDULER_IX(ix);
 	ASSERT(ix == esdp->no - 1);
+	if (erts_single_threaded)
+	    continue; /* main thread runs scheduler 1; see erts_run_scheduler_on_main_thread() */
 	erts_snprintf(opts.name, sizeof(name), "erts_sched_%d", ix + 1);
 	res = ethr_thr_create(&esdp->tid, sched_thread_func, (void*)esdp, &opts);
 	if (res != 0) {
@@ -8974,7 +8979,7 @@ erts_start_schedulers(void)
     }
 
     ix = 0;
-    while (ix < erts_no_aux_work_threads) {
+    while (!erts_single_threaded && ix < erts_no_aux_work_threads) {
 	int id = ix == 0 ? 1 : ix + 1 - (int) erts_no_schedulers;
 	erts_snprintf(opts.name, sizeof(name), "erts_aux_%d", id);
 
@@ -8993,7 +8998,7 @@ erts_start_schedulers(void)
                                            * erts_no_poll_threads);
 
     
-    for (ix = 0; ix < erts_no_poll_threads; ix++) {
+    for (ix = 0; !erts_single_threaded && ix < erts_no_poll_threads; ix++) {
         ErtsBlockPollThreadData *bpt = &block_poll_thread_data[ix].block_data;
         erts_mtx_init(&bpt->mtx, "block_poll_thread",
                       make_small(ix),
@@ -9002,13 +9007,26 @@ erts_start_schedulers(void)
         erts_cnd_init(&bpt->cnd);
         bpt->blocked = 0;
         bpt->id = ix;
-        
+
         erts_snprintf(opts.name, sizeof(name), "erts_poll_%d", ix);
 
         res = ethr_thr_create(&tid, poll_thread, (void*) bpt, &opts);
         if (res != 0)
             erts_exit(ERTS_ABORT_EXIT, "Failed to create poll thread\n");
     }
+}
+
+/*
+ * Single-threaded mode: run scheduler 1 directly on the calling (main) thread
+ * instead of spawning an OS thread for it. This does the full scheduler-thread
+ * setup and then enters process_main(), so it never returns. Called from
+ * erl_start() in place of erts_sys_main_thread() when erts_single_threaded.
+ */
+void
+erts_run_scheduler_on_main_thread(void)
+{
+    ASSERT(erts_single_threaded);
+    sched_thread_func((void *) ERTS_SCHEDULER_IX(0));
 }
 
 BIF_RETTYPE

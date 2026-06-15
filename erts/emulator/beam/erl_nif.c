@@ -3433,10 +3433,24 @@ static_schedule_dirty_nif(ErlNifEnv* env, erts_aint32_t dirty_psflg,
     ASSERT(is_atom(mod) && is_atom(func));
     ASSERT(fp);
 
-    (void) erts_atomic32_read_bset_nob(&proc->state,
-					   (ERTS_PSFLG_DIRTY_CPU_PROC
-					    | ERTS_PSFLG_DIRTY_IO_PROC),
-					   dirty_psflg);
+    /*
+     * When there are no dirty schedulers of the required kind (single-threaded
+     * wasm build), do not flag the process as dirty -- it would be enqueued on
+     * a dirty run queue that is never serviced. Clearing the flags runs the job
+     * inline on the normal scheduler instead (e.g. prim_file I/O). See the
+     * erts_single_threaded handling in erl_init.c.
+     */
+    {
+        erts_aint32_t set_dirty_flg =
+            ((dirty_psflg == ERTS_PSFLG_DIRTY_CPU_PROC)
+                 ? (erts_no_dirty_cpu_schedulers > 0)
+                 : (erts_no_dirty_io_schedulers > 0))
+            ? dirty_psflg : 0;
+        (void) erts_atomic32_read_bset_nob(&proc->state,
+                                           (ERTS_PSFLG_DIRTY_CPU_PROC
+                                            | ERTS_PSFLG_DIRTY_IO_PROC),
+                                           set_dirty_flg);
+    }
 
     return schedule(env, fp, NULL, mod, func, argc, argv);
 }
@@ -3535,12 +3549,18 @@ enif_schedule_nif(ErlNifEnv* env, const char* fun_name, int flags,
 	result = schedule(env, execute_nif, fp, proc->current->module,
 			  fun_name_atom, argc, argv);
     else if (!(flags & ~(ERL_NIF_DIRTY_JOB_IO_BOUND|ERL_NIF_DIRTY_JOB_CPU_BOUND))) {
+        /* No dirty schedulers -> run inline on the normal scheduler (see the
+         * erts_single_threaded handling in erl_init.c). */
+        int cpu_bound = (flags == ERL_NIF_DIRTY_JOB_CPU_BOUND);
+        erts_aint32_t set_dirty_flg =
+            (cpu_bound ? (erts_no_dirty_cpu_schedulers > 0)
+                       : (erts_no_dirty_io_schedulers > 0))
+            ? (cpu_bound ? ERTS_PSFLG_DIRTY_CPU_PROC : ERTS_PSFLG_DIRTY_IO_PROC)
+            : 0;
         (void) erts_atomic32_read_bset_nob(&proc->state,
                                            (ERTS_PSFLG_DIRTY_CPU_PROC
                                             | ERTS_PSFLG_DIRTY_IO_PROC),
-                                           (flags == ERL_NIF_DIRTY_JOB_CPU_BOUND
-                                            ? ERTS_PSFLG_DIRTY_CPU_PROC
-                                            : ERTS_PSFLG_DIRTY_IO_PROC));
+                                           set_dirty_flg);
         result = schedule(env, fp, NULL, proc->current->module, fun_name_atom,
                           argc, argv);
     }

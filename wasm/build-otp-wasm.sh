@@ -22,10 +22,13 @@ source "$EMSDK/emsdk_env.sh"
 cd "$ERL_TOP" || exit 1
 STAGE="${1:-all}"
 
-# Emscripten pthreads BEAM: -pthread for thread detection + compiles.
-export CFLAGS="-O2 -pthread -Wno-implicit-function-declaration"
-export CXXFLAGS="-O2 -pthread"
-export LDFLAGS="-pthread"
+# Single-threaded BEAM: NO -pthread, so Emscripten builds a non-shared-memory
+# module (no SharedArrayBuffer / cross-origin isolation needed). The emulator
+# runs scheduler 1 on the worker main thread and creates no OS threads; see the
+# erts_single_threaded handling (auto-enabled under __EMSCRIPTEN__).
+export CFLAGS="-O2 -Wno-implicit-function-declaration"
+export CXXFLAGS="-O2"
+export LDFLAGS=""
 
 # emscripten's gethostbyname_r/gethostbyaddr_r have a glibc arity that ei_resolve.c
 # misdetects under cross-configure; force its portable fallback so erl_interface's libei

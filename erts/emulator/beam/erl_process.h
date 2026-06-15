@@ -112,6 +112,14 @@ extern Uint ERTS_WRITE_UNLIKELY(erts_no_dirty_cpu_schedulers);
 extern Uint ERTS_WRITE_UNLIKELY(erts_no_dirty_io_schedulers);
 extern Uint ERTS_WRITE_UNLIKELY(erts_no_run_queues);
 extern int ERTS_WRITE_UNLIKELY(erts_no_aux_work_threads);
+/*
+ * Single-threaded mode: when set, the runtime is forced onto a single OS
+ * thread (1 normal scheduler, 0 dirty CPU/IO schedulers, 0 async threads).
+ * Used by the wasm build so the emulator can be linked without pthreads and
+ * thus without SharedArrayBuffer. Set in erl_start() from __EMSCRIPTEN__ and/or
+ * the ERL_SINGLE_THREADED environment variable.
+ */
+extern int ERTS_WRITE_UNLIKELY(erts_single_threaded);
 extern int erts_sched_thread_suggested_stack_size;
 extern int erts_dcpu_sched_thread_suggested_stack_size;
 extern int erts_dio_sched_thread_suggested_stack_size;
@@ -2105,6 +2113,7 @@ erts_block_multi_scheduling(Process *, ErtsProcLocks, int, int, int);
 int erts_is_multi_scheduling_blocked(void);
 Eterm erts_multi_scheduling_blockers(Process *, int);
 void erts_start_schedulers(void);
+void erts_run_scheduler_on_main_thread(void);
 void erts_alloc_notify_delayed_dealloc(int);
 void erts_alloc_ensure_handle_delayed_dealloc_call(int);
 void erts_notify_canceled_timer(ErtsSchedulerData *, int);

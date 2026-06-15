@@ -1203,6 +1203,10 @@ init_smp_sig_notify(void)
 		 errno);
     }
 
+    if (erts_single_threaded)
+        return; /* no OS threads in single-threaded mode; OS signals are not
+                 * dispatched (irrelevant for the wasm worker). See erl_init.c. */
+
     /* Start signal handler thread */
     erts_thr_create(&sig_dispatcher_tid,
 			signal_dispatcher_thread_func,
