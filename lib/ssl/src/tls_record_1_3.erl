@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2007-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -266,7 +266,10 @@ process_early_data(ConnectionStates0, #{early_data:=EarlyData0} = ReadState0,
                     ReadState = ReadState0#{sequence_number => Seq + 1, early_data => EarlyData},
                     ConnectionStates = ConnectionStates0#{current_read => ReadState},
                     {Record#ssl_tls{early_data = true}, ConnectionStates}
-            end
+            end;
+        #ssl_tls{type = Type} ->
+            ?ALERT_REC(?FATAL, ?UNEXPECTED_MESSAGE,
+                       {unexpected_inner_type, Type})
     end.
 
 encode_plain_text(Type, Data, 0,

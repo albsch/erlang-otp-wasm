@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 
 -module(code_SUITE).
 -export([all/0, suite/0, init_per_suite/1, end_per_suite/1, 
+         init_per_testcase/2, end_per_testcase/2,
          versions/1,new_binary_types/1,
          bad_beam_file/1,
          literal_leak/1,
@@ -67,6 +68,44 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
     catch erts_debug:set_internal_state(available_internal_state, false),
     ok.
+
+init_per_testcase(_TestCase, Config) ->
+    Config.
+
+end_per_testcase(TestCase, Config) ->
+    case proplists:get_value(tc_status, Config) of
+        {failed, timetrap_timeout} ->
+            %%
+            %% Try to catch hanging calls to erlang:purge_module/1.
+            %% Seen to happen on 32-bit with single scheduler (on apollo)
+            %%
+            io:format("end_per_testcase: Failed with timetrap_timeout.\n", []),
+            io:format("process_info for erts_code_purger:\n~p\n",
+                      [process_info_more(erts_code_purger)]),
+            io:format("Printing system_info(thread_progress) to standard_error\n",[]),
+            io:format(standard_error, "end_per_testcase(~p):\n", [TestCase]),
+            erlang:system_info(thread_progress),
+            timer:sleep(1000),
+            erlang:system_info(thread_progress),
+            io:format("CALLING erlang:halt(abort) ...."),
+            io:format(standard_error, "CALLING erlang:halt(abort)....",[]),
+            erlang:halt(abort),
+            void;
+        _ ->
+            void
+    end.
+
+process_info_more(undefined) ->
+    undefined;
+process_info_more(Name) when is_atom(Name) ->
+    process_info_more(whereis(Name));
+process_info_more(Pid) ->
+    process_info(Pid, [status, catchlevel, current_function, current_location,
+                       links, dictionary, trap_exit, error_handler, priority,
+                       group_leader, total_heap_size, heap_size, stack_size,
+                       garbage_collection, suspending,
+                       current_stacktrace, message_queue_len, messages, trace]).
+
 
 %% Make sure that only two versions of a module can be loaded.
 versions(Config) when is_list(Config) ->
@@ -149,14 +188,30 @@ new_binary_types(Config) when is_list(Config) ->
 
 %% Ensure that the loader doesn't crash or leak memory when attempting
 %% to load bad BEAM files. We depend on valgrind to notice leaks.
-bad_beam_file(_Config) ->
+bad_beam_file(Config) ->
     Mod = ?FUNCTION_NAME,
 
+    PrivDir = proplists:get_value(priv_dir, Config),
+    SrcName = filename:join(PrivDir, atom_to_list(Mod) ++ ".erl"),
+    ModList = atom_to_list(Mod),
+
     BadBeam1 = bad_beam_file_1(Mod),
-    {error,badfile} = code:load_binary(Mod, atom_to_list(Mod), BadBeam1),
+    {error,badfile} = code:load_binary(Mod, ModList, BadBeam1),
 
     BadBeam2 = bad_beam_file_2(Mod),
-    {error,badfile} = code:load_binary(Mod, atom_to_list(Mod), BadBeam2),
+    {error,badfile} = code:load_binary(Mod, ModList, BadBeam2),
+
+    BadBeam3 = bad_beam_file_3(Mod, SrcName),
+    {ok, Peer, Node} = ?CT_PEER(["+D"]),
+    {error,badfile} =
+        erpc:call(Node,
+                  fun() ->
+                          code:load_binary(Mod, ModList, BadBeam3)
+                  end),
+    peer:stop(Peer),
+
+    BadBeam4 = bad_beam_file_4(Mod, SrcName),
+    {error,badfile} = code:load_binary(Mod, ModList, BadBeam4),
 
     ok.
 
@@ -164,6 +219,7 @@ bad_beam_file(_Config) ->
 bad_beam_file_1(Mod) ->
     Exp = [{term,0}],
     Attr = [],
+    Anno = #{},
     Fs = [{function,term,0,3,
            [{label,1},
             {line,[]},
@@ -171,7 +227,7 @@ bad_beam_file_1(Mod) ->
             {label,2},
             {move,nil,nil},                     %Illegal destination.
             return]}],
-    Asm = {Mod,Exp,Attr,Fs,3},
+    Asm = {Mod,Exp,Attr,Anno,Fs,3},
 
     %% Bypass beam_validator.
     {ok,BadBeam} = beam_asm:module(Asm, [], [], []),
@@ -179,13 +235,45 @@ bad_beam_file_1(Mod) ->
 
 %% Build a BEAM file with an invalid attributes chunk.
 bad_beam_file_2(Mod) ->
-    Asm = {Mod,[],[],[],1},
+    Asm = {Mod,[],[],#{},[],1},
     {ok,BadBeam0} = beam_asm:module(Asm, [], [], []),
     {ok, Mod, Chunks0} = beam_lib:all_chunks(BadBeam0),
     Chunks1 = lists:keydelete("Attr", 1, Chunks0),
     Chunks = [{"Attr",<<"bad_attribute_chunk">>} | Chunks1],
     {ok,BadBeam} = beam_lib:build_module(Chunks),
     BadBeam.
+
+%% Build a BEAM file with the beam_debug_info option but without a
+%% "DbgB" chunk.
+bad_beam_file_3(Mod, SrcName) ->
+    S = ~"""
+         -module(bad_beam_file).
+          -export([go/0]).
+          go() -> ok.
+         """,
+    compile_remove_chunk(Mod, SrcName, S, "DbgB", [beam_debug_info]).
+
+%% Build a BEAM file that creates a native record but with the "Recs" chunk
+%% missing.
+bad_beam_file_4(Mod, SrcName) ->
+    S = ~"""
+         -module(bad_beam_file).
+          -export([go/0]).
+          -record #empty{}.
+          go() -> #empty{}.
+         """,
+    compile_remove_chunk(Mod, SrcName, S, "Recs", []).
+
+compile_remove_chunk(Mod, SrcName, Src, Tag, Opts) ->
+    ok = file:write_file(SrcName, Src),
+    {ok,Mod,Beam0} = compile:file(SrcName, [report,binary|Opts]),
+    ok = file:delete(SrcName),
+
+    %% Remove the chunk from the BEAM file.
+    {ok,Mod,Chunks0} = beam_lib:all_chunks(Beam0),
+    Chunks = lists:keydelete(Tag, 1, Chunks0),
+    {ok,Beam} = beam_lib:build_module(Chunks),
+    Beam.
 
 %% Ensure that literal areas don't leak when erlang:prepare_loading/2
 %% is not followed by erlang:finish_loading/1.
@@ -194,6 +282,7 @@ literal_leak(_Config) ->
     HugeLiteral = binary_to_list(<<0:(1024*1024)/unit:8>>),
     Exp = [{term,0}],
     Attr = [],
+    Anno = #{},
     Fs = [{function,term,0,3,
            [{label,1},
             {line,[]},
@@ -201,7 +290,7 @@ literal_leak(_Config) ->
             {label,2},
             {move,{literal,HugeLiteral},{x,0}},
             return]}],
-    Asm = {Mod,Exp,Attr,Fs,3},
+    Asm = {Mod,Exp,Attr,Anno,Fs,3},
     {ok,Beam} = beam_asm:module(Asm, [], [], []),
 
     %% valgrind cannot help us find leak of literals because literal
@@ -373,7 +462,13 @@ many_purges(Config) when is_list(Config) ->
 
     ct:log("Process count: ~p~n", [erlang:system_info(process_count)]),
 
-    many_purges_test(File, Code, 1000),
+    Rounds1 = case erlang:system_info(emu_type) of
+                 debug -> 100;
+                 valgrind -> 100;
+                 _ -> 1000
+             end,
+
+    many_purges_test(File, Code, Rounds1),
 
     Rand = fun Rand() ->
                    _ = lists:seq(1, rand:uniform(100)),
@@ -384,13 +479,17 @@ many_purges(Config) when is_list(Config) ->
 
     ct:log("Process count: ~p~n", [erlang:system_info(process_count)]),
 
-    many_purges_test(File, Code, 1000),
+    many_purges_test(File, Code, Rounds1),
 
+    Rounds2 = case erlang:system_info(schedulers_online) of
+                  1 ->
+                      Rounds1 div 50;
+                  _ ->
+                      Rounds1
+              end,
     Ps1 = lists:map(fun (_) -> spawn(Rand) end, lists:seq(1, 1000)),
-
     ct:log("Process count: ~p~n", [erlang:system_info(process_count)]),
-
-    many_purges_test(File, Code, 1000),
+    many_purges_test(File, Code, Rounds2),
 
     Ps = Ps0 ++ Ps1,
 
@@ -399,13 +498,22 @@ many_purges(Config) when is_list(Config) ->
 
     ok.
 
-many_purges_test(_File, _Code, 0) ->
-    ok;
 many_purges_test(File, Code, N) ->
+    many_purges_test(File, Code, N, 1).
+
+many_purges_test(_File, _Code, N, I) when I > N ->
+    ok;
+many_purges_test(File, Code, N, I) ->
+    T0 = erlang:monotonic_time(microsecond),
     {module,my_code_test} = code:load_binary(my_code_test, File, Code),
+    T1 = erlang:monotonic_time(microsecond),
     true = erlang:delete_module(my_code_test),
+    T2 = erlang:monotonic_time(microsecond),
     true = erlang:purge_module(my_code_test),
-    many_purges_test(File, Code, N-1).
+    T3 = erlang:monotonic_time(microsecond),
+    io:format("Purge #~p. Load=~p Delete=~p Purge=~p",
+              [I, T1-T0, T2-T1, T3-T2]),
+    many_purges_test(File, Code, N, I+1).
 
 external_fun(Config) when is_list(Config) ->
     false = erlang:function_exported(another_code_test, x, 1),
@@ -484,6 +592,7 @@ constant_pools_test(Config) when is_list(Config) ->
     B = literals:b(),
     C = literals:huge_bignum(),
     D = literals:funs(),
+    E = literals:records(),
     process_flag(trap_exit, true),
     Self = self(),
 
@@ -497,7 +606,7 @@ constant_pools_test(Config) when is_list(Config) ->
     true = erlang:purge_module(literals),
     NoOldHeap ! done,
     receive
-        {'EXIT',NoOldHeap,{A,B,C,D}} ->
+        {'EXIT',NoOldHeap,{A,B,C,D,E}} ->
             ok;
         Other_NoOldHeap ->
             ct:fail({unexpected,Other_NoOldHeap})
@@ -531,7 +640,8 @@ constant_pools_test(Config) when is_list(Config) ->
     erlang:purge_module(literals),
     OldHeap ! done,
     receive
-	{'EXIT',OldHeap,{A,B,C,D,[1,2,3|_]=Seq}} when length(Seq) =:= 16 ->
+	{'EXIT',OldHeap,{A,B,C,D,E,[1,2,3|_]=Seq}}
+          when length(Seq) =:= 16 ->
 	    ok
     end,
 
@@ -571,7 +681,8 @@ no_old_heap(Parent) ->
     B = literals:b(),
     C = literals:huge_bignum(),
     D = literals:funs(),
-    Res = {A,B,C,D},
+    E = literals:records(),
+    Res = {A,B,C,D,E},
     Parent ! go,
     receive
         done ->
@@ -583,7 +694,8 @@ old_heap(Parent) ->
     B = literals:b(),
     C = literals:huge_bignum(),
     D = literals:funs(),
-    Res = {A,B,C,D,lists:seq(1, 16)},
+    E = literals:records(),
+    Res = {A,B,C,D,E,lists:seq(1, 16)},
     create_old_heap(),
     Parent ! go,
     receive
@@ -786,6 +898,7 @@ do_fake_literals(Mod) ->
 make_literal_module(Mod, Term) ->
     Exp = [{term,0}],
     Attr = [],
+    Anno = #{},
     Fs = [{function,term,0,2,
            [{label,1},
             {line,[]},
@@ -793,7 +906,7 @@ make_literal_module(Mod, Term) ->
             {label,2},
             {move,{literal,Term},{x,0}},
             return]}],
-    Asm = {Mod,Exp,Attr,Fs,3},
+    Asm = {Mod,Exp,Attr,Anno,Fs,3},
     {ok,Mod,Beam} = compile:forms(Asm, [from_asm,binary,report]),
     code:load_binary(Mod, atom_to_list(Mod), Beam).
 

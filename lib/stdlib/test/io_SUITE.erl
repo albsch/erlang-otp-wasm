@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -36,7 +36,10 @@
          otp_14285/1, limit_term/1, otp_14983/1, otp_15103/1, otp_15076/1,
          otp_15159/1, otp_15639/1, otp_15705/1, otp_15847/1, otp_15875/1,
          github_4801/1, chars_limit/1, error_info/1, otp_17525/1,
-         unscan_format_without_maps_order/1, build_text_without_maps_order/1]).
+         unscan_format_without_maps_order/1, build_text_without_maps_order/1,
+         native_records/1, cover_fread/1,
+         format_w_empty_map/1, format_w_limited/1,
+         write_record_maps_order/1, write_record_latin1_encoding/1]).
 
 -export([pretty/2, trf/3, rfd/2]).
 
@@ -53,6 +56,7 @@
 -define(format(S, A), ok).
 -define(privdir(Conf), proplists:get_value(priv_dir, Conf)).
 -endif.
+-include_lib("stdlib/include/assert.hrl").
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
@@ -71,7 +75,11 @@ all() ->
      otp_14285, limit_term, otp_14983, otp_15103, otp_15076, otp_15159,
      otp_15639, otp_15705, otp_15847, otp_15875, github_4801, chars_limit,
      error_info, otp_17525, unscan_format_without_maps_order,
-     build_text_without_maps_order].
+     build_text_without_maps_order,
+     native_records,
+     format_w_empty_map, format_w_limited,
+     write_record_maps_order, write_record_latin1_encoding,
+     cover_fread].
 
 %% Error cases for output.
 error_1(Config) when is_list(Config) ->
@@ -80,18 +88,18 @@ error_1(Config) when is_list(Config) ->
     PrivDir = ?privdir(Config),
     File = filename:join(PrivDir, "slask"),
     {ok, F1} = file:open(File, [write]),
-    {'EXIT', _} = (catch io:format(muttru, "hej", [])),
-    {'EXIT', _} = (catch io:format(F1, pelle, "hej")),
-    {'EXIT', _} = (catch io:format(F1, 1, "hej")),
-    {'EXIT', _} = (catch io:format(F1, "~p~", [kaka])),
-    {'EXIT', _} = (catch io:format(F1, "~m~n", [kaka])),
+    ?assertError(_, io:format(muttru, "hej", [])),
+    ?assertError(_, io:format(F1, pelle, "hej")),
+    ?assertError(_, io:format(F1, 1, "hej")),
+    ?assertError(_, io:format(F1, "~p~", [kaka])),
+    ?assertError(_, io:format(F1, "~m~n", [kaka])),
 
     %% This causes the file process to die, and it is linked to us,
     %% so we can't catch the error this easily.
     %%    {'EXIT', _} = (catch io:put_chars(F1, 666)),
 
     file:close(F1),
-    {'EXIT', _} = (catch io:format(F1, "~p", ["hej"])),
+    ?assertError(_,io:format(F1, "~p", ["hej"])),
     ok.
 
 format_neg_zero(Config) when is_list(Config) ->
@@ -148,17 +156,20 @@ float_g(Config) when is_list(Config) ->
      "5.0e+4",
      "5.0e+5"] = float_g_1("~.2g", 5.0, -2, 5),
 
-    case catch fmt("~.1g", [0.5]) of
-	"0.5" ->
-	    ["5.0e-2",
-	     "0.5",
-	     "5.0e+0",
-	     "5.0e+1",
-	     "5.0e+2",
-	     "5.0e+3",
-	     "5.0e+4",
-	     "5.0e+5"] = float_g_1("~.1g", 5.0, -2, 5);
-	{'EXIT',_} -> ok
+    try
+        fmt("~.1g", [0.5])
+    of
+        "0.5" ->
+            ["5.0e-2",
+             "0.5",
+             "5.0e+0",
+             "5.0e+1",
+             "5.0e+2",
+             "5.0e+3",
+             "5.0e+4",
+             "5.0e+5"] = float_g_1("~.1g", 5.0, -2, 5)
+    catch
+        _:_ -> ok
     end,
 
     ["4.99999e-2",
@@ -215,7 +226,7 @@ float_w(Config) when is_list(Config) ->
     ok.
 
 calling_self(Config) when is_list(Config) ->
-    {'EXIT', {calling_self, _}} = (catch io:format(self(), "~p", [oops])),
+    ?assertError(calling_self, io:format(self(), "~p", [oops])),
     ok.
 
 %% OTP-5403. ~s formats I/O lists and a single binary.
@@ -758,8 +769,25 @@ otp_7421(Config) when is_list(Config) ->
        rp({aa,bb,c,dd,eee,fff}, 1, 80, -1, 4, none)),
     ok.
 
+format_w_limited(_Config) ->
+
+    "[97]" = fmt("~4w", ["a"]),
+    "****" = fmt("~4w", ["aa"]),
+    "<<97>>" = fmt("~6w", [<<"a">>]),
+    "******" = fmt("~6w", [<<"aa">>]),
+    "[1,2,3,<<97>>]" = fmt("~14w", [[1,2,3,<<"a">>]]),
+    "**************" = fmt("~14w", [[1,2,3,<<"aa">>]]),
+
+    ok.
+
 bt(Bin, R) ->
-    R = binary_to_list(Bin).
+    case binary_to_list(Bin) of
+        R ->
+            ok;
+        Other ->
+            io:format("Expected:~n~ts~nGot:~n~ts~n", [Other, R]),
+            exit({fail, Bin, R})
+    end.
 
 p(Term, D) ->
     rp(Term, 1, 80, D).
@@ -780,14 +808,14 @@ rp(Term, Col, Ll, D, M, none) ->
 rp(Term, Col, Ll, D, M, RF) ->
     %% io:format("~n~n*** Col = ~p Ll = ~p D = ~p~n~p~n-->~n", 
     %%           [Col, Ll, D, Term]),
-    R = io_lib_pretty:print(Term, Col, Ll, D, M, RF),
-    %% io:format("~s~n<--~n", [R]),
-    OrigRes = lists:flatten(io_lib:format("~s", [R])),
     Args = [{column, Col}, {line_length, Ll}, {depth, D},
             {line_max_chars, M}, {record_print_fun, RF},
             %% Default values for print/[1,3,4,5,6]
             {chars_limit, -1}, {encoding, latin1},
-            {strings, true}, {maps_order, undefined}],
+            {strings, true}, {maps_order, ordered}],
+    R = io_lib_pretty:print(Term, Args),
+    %% io:format("~s~n<--~n", [R]),
+    OrigRes = lists:flatten(io_lib:format("~s", [R])),
     check_bin_p(OrigRes, Term, Args).
 
 check_bin_p(OrigRes, Term, Args) ->
@@ -946,98 +974,99 @@ manpage(Config) when is_list(Config) ->
 otp_6708(Config) when is_list(Config) ->
     bt(<<"[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,\n"
                " 23,24,25,26,27,28,29|...]">>,
-             p(lists:seq(1,1000), 30)),
+       p(lists:seq(1,1000), 30)),
     bt(<<"{lkjasklfjsdak,mlkasjdflksj,klasdjfklasd,jklasdfjkl,\n"
-               "               jklsdjfklsd,masdfjkkl}">>,
-             p({lkjasklfjsdak,mlkasjdflksj,klasdjfklasd,jklasdfjkl,
+         "               jklsdjfklsd,masdfjkkl}">>,
+       p({lkjasklfjsdak,mlkasjdflksj,klasdjfklasd,jklasdfjkl,
                 jklsdjfklsd, masdfjkkl}, -1)),
-    bt(<<"#b{f = {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,\n"
-               "                    kjdd}}">>,
-             p({b, {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,kjdd}}, 
-               -1)),
-    bt(<<"#b{f = {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,\n"
-               "                    kdd}}">>,
-             p({b, {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,kdd}}, 
-               -1)),
     bt(<<"#e{f = undefined,g = undefined,\n"
-               "   h = #e{f = 11,g = 22,h = 333}}">>,
-             p({e,undefined,undefined,{e,11,22,333}}, -1)),
+         "   h = #e{f = \"111111111111111111111111111111111\",g = 22,\n",
+         "          h = 333}}">>,
+       p({e,undefined,undefined,{e,"111111111111111111111111111111111",22,333}}, -1)),
+    bt(<<"#b{f = {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,\n"
+         "                    kjdd}}">>,
+       p({b, {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,kjdd}},
+         -1)),
+    bt(<<"#b{f = {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,\n"
+         "                    kdd}}">>,
+       p({b, {lkjljalksdf,jklaskfjd,kljasdlf,kljasdf,kljsdlkf,kdd}},
+         -1)),
     bt(<<"[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21|\n"
-               " apa11]">>,
-             p(lists:seq(1,21) ++ apa11, -1)),
+         " apa11]">>,
+       p(lists:seq(1,21) ++ apa11, -1)),
     bt(<<"[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,\n"
-               " 23,\n"
-               " {{abadalkjlasdjflksdajfksdklfsdjlkfdlskjflsdj"
-                        "flsdjfldsdsdddd}}]">>,
-          p(lists:seq(1,23) ++ 
-            [{{abadalkjlasdjflksdajfksdklfsdjlkfdlskjflsdjflsdjfldsdsdddd}}],
+         " 23,\n"
+         " {{abadalkjlasdjflksdajfksdklfsdjlkfdlskjflsdj"
+         "flsdjfldsdsdddd}}]">>,
+       p(lists:seq(1,23) ++
+             [{{abadalkjlasdjflksdajfksdklfsdjlkfdlskjflsdjflsdjfldsdsdddd}}],
             -1)),
     bt(<<"{lkjasdf,\n"
-               "    {kjkjsd,\n"
-               "        {kjsd,\n"
-               "            {kljsdf,\n"
-               "                {kjlsd,{dkjsdf,{kjlds,{kljsd,{kljs,"
-                                   "{kljlkjsd}}}}}}}}}}">>,
-             p({lkjasdf,{kjkjsd,{kjsd,
-                                 {kljsdf,
-                                  {kjlsd,
-                                   {dkjsdf,{kjlds,
-                                            {kljsd,{kljs,{kljlkjsd}}}}}}}}}},
-               -1)),
+         "    {kjkjsd,\n"
+         "        {kjsd,\n"
+         "            {kljsdf,\n"
+         "                {kjlsd,{dkjsdf,{kjlds,{kljsd,{kljs,"
+         "{kljlkjsd}}}}}}}}}}">>,
+       p({lkjasdf,{kjkjsd,{kjsd,
+                           {kljsdf,
+                            {kjlsd,
+                             {dkjsdf,{kjlds,
+                                      {kljsd,{kljs,{kljlkjsd}}}}}}}}}},
+         -1)),
     bt(<<"{lkjasdf,\n"
-               "    {kjkjsd,\n"
-               "        {kjsd,{kljsdf,{kjlsd,{dkjsdf,{kjlds,"
-                                "{kljsd,{kljs}}}}}}}}}">>,
-             p({lkjasdf,{kjkjsd,{kjsd,
-                                 {kljsdf,{kjlsd,{dkjsdf,
-                                                 {kjlds,{kljsd,{kljs}}}}}}}}},
+         "    {kjkjsd,\n"
+         "        {kjsd,{kljsdf,{kjlsd,{dkjsdf,{kjlds,"
+         "{kljsd,{kljs}}}}}}}}}">>,
+       p({lkjasdf,{kjkjsd,{kjsd,
+                           {kljsdf,{kjlsd,{dkjsdf,
+                                           {kjlds,{kljsd,{kljs}}}}}}}}},
                -1)),
     bt(<<"<<1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,\n"
-               "  22,23>>">>,
-             p(list_to_binary(lists:seq(1,23)), -1)),
+         "  22,23>>">>,
+       p(list_to_binary(lists:seq(1,23)), -1)),
     bt(<<"<<100,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,\n"
-               "  27>>">>,
-             p(list_to_binary([100|lists:seq(10,27)]), -1)),
+         "  27>>">>,
+       p(list_to_binary([100|lists:seq(10,27)]), -1)),
     bt(<<"<<100,101,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,\n"
-               "  26>>">>,
-             p(list_to_binary([100,101|lists:seq(10,26)]), -1)),
+         "  26>>">>,
+       p(list_to_binary([100,101|lists:seq(10,26)]), -1)),
     bt(<<"{{<<100,101,102,10,11,12,13,14,15,16,17,18,19,20,21,22,\n"
-               "    23>>}}">>,
-             p({{list_to_binary([100,101,102|lists:seq(10,23)])}}, -1)),
+         "    23>>}}">>,
+       p({{list_to_binary([100,101,102|lists:seq(10,23)])}}, -1)),
     bt(<<"[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22|\n"
-               " ap]">>,
-             p(lists:seq(1,22) ++ ap, -1)),
+         " ap]">>,
+       p(lists:seq(1,22) ++ ap, -1)),
     bt(<<"[1,2,3,4,5,6,7,8,9,10,{},[],\n <<>>,11,12,13,14,15]">>,
-             p(lists:seq(1,10) ++ [{},[],<<>>] ++ lists:seq(11,15),1,30,-1)),
+       p(lists:seq(1,10) ++ [{},[],<<>>] ++ lists:seq(11,15),1,30,-1)),
     bt(<<"[ddd,ddd,\n"
-               " {1},\n"
-               " [1,2],\n"
-               " ddd,kdfd,\n"
-               " [[1,2],a,b,c],\n"
-               " <<\"foo\">>,<<\"bar\">>,1,\n"
-               " {2}]">>,
-             p([ddd,ddd,{1},[1,2],ddd,kdfd,[[1,2],a,b,c],<<"foo">>,<<"bar">>,
-                1,{2}],1,50,-1)),
+         " {1},\n"
+         " [1,2],\n"
+         " ddd,kdfd,\n"
+         " [[1,2],a,b,c],\n"
+         " <<\"foo\">>,<<\"bar\">>,1,\n"
+         " {2}]">>,
+       p([ddd,ddd,{1},[1,2],ddd,kdfd,[[1,2],a,b,c],<<"foo">>,<<"bar">>,
+          1,{2}],1,50,-1)),
 
     bt(<<"{dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,jksd,\n"
-               "                                                     "
-                   "lkjsdf,kljsdf,kljsf,kljsdf,kljsdf,jkldf,jklsdf,kljsdf,\n"
-               "                                                     "
-                   "kljsdf,jklsdf,lkjfd,lkjsdf,kljsdf,kljsdf,lkjsdf,kljsdf,\n"
-               "                                                     "
-                   "lkjsdfsd,kljsdf,kjsfj}">>,
-             p({dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,jksd,
-                lkjsdf,kljsdf,kljsf,kljsdf,kljsdf,jkldf,jklsdf,kljsdf,
-                kljsdf,jklsdf,lkjfd,lkjsdf,kljsdf,kljsdf,lkjsdf,kljsdf,
-                lkjsdfsd,kljsdf,kjsfj}, 1, 110, -1)),
+         "                                                     "
+         "lkjsdf,kljsdf,kljsf,kljsdf,kljsdf,jkldf,jklsdf,kljsdf,\n"
+         "                                                     "
+         "kljsdf,jklsdf,lkjfd,lkjsdf,kljsdf,kljsdf,lkjsdf,kljsdf,\n"
+         "                                                     "
+         "lkjsdfsd,kljsdf,kjsfj}">>,
+       p({dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,jksd,
+          lkjsdf,kljsdf,kljsf,kljsdf,kljsdf,jkldf,jklsdf,kljsdf,
+          kljsdf,jklsdf,lkjfd,lkjsdf,kljsdf,kljsdf,lkjsdf,kljsdf,
+          lkjsdfsd,kljsdf,kjsfj}, 1, 110, -1)),
     bt(<<"{dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,"
-                  "#d{aaaaaaaaaaaaaaaaaaaa = 1,\n"
-               "                                                        "
-                  "bbbbbbbbbbbbbbbbbbbb = 2,cccccccccccccccccccc = 3,\n"
-               "                                                        "
-                  "dddddddddddddddddddd = 4,eeeeeeeeeeeeeeeeeeee = 5}}">>,
-             rp({dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,
-                 {d,1,2,3,4,5}},1,200,-1)),
+         "#d{aaaaaaaaaaaaaaaaaaaa = 1,\n"
+         "                                                        "
+         "bbbbbbbbbbbbbbbbbbbb = 2,cccccccccccccccccccc = 3,\n"
+         "                                                        "
+         "dddddddddddddddddddd = 4,eeeeeeeeeeeeeeeeeeee = 5}}">>,
+       rp({dskljsadfkjsdlkjflksdjflksdjfklsdjklfjsdklfjlsdjfkl,
+           {d,1,2,3,4,5}},1,200,-1)),
     ok.
 
 -define(ONE(N), ((1 bsl N) - 1)).
@@ -1444,14 +1473,22 @@ g_t_1(V, Sv) ->
             SvLow = step_lsd(Sv, -Times)
     end,
 
-    case catch list_to_float(SvLow) of
+    try
+        list_to_float(SvLow)
+    of
         V -> throw(low_is_v);
         _ -> ok
+    catch
+        _:_ -> ok
     end,
 
-    case catch list_to_float(SvHigh) of
+    try
+        list_to_float(SvHigh)
+    of
         V -> throw(high_is_v);
         _ -> ok
+    catch
+        _:_ -> ok
     end,
 
     %% Check that Sv has enough digits.
@@ -1623,9 +1660,12 @@ f2r({S,BE,M}) when 0 =< S, S =< 1,
                    0 =< M, M =< ?ALL_ONES ->
     Vr = {T,N} = f2r1(S, BE, M),
     <<F:64/float>> = <<S:1, BE:11, M:52>>,
-    case catch T/N of
-        {'EXIT', _} -> ok;
+    try
+        T/N
+    of
         TN -> true = F == TN
+    catch
+        _:_ -> ok
     end,
     Vr.
 
@@ -1723,7 +1763,7 @@ g_choice_small(S) when is_list(S) ->
     El = length(ES),
     I = list_to_integer(IS),
     if
-        El =/= 0, ((I > 9) or (I < -9)) ->
+        El =/= 0, I > 9 orelse I < -9 ->
             throw(too_many_digits_before_the_dot);
         El =/= 0, I =:= 0 ->
             throw(zero_before_the_dot);
@@ -2158,7 +2198,7 @@ bad_printable_range(Config) when is_list(Config) ->
          after 6000 ->
                    timeout
          end,
-    catch port_close(P),
+    try port_close(P) catch _:_ -> ok end,
     flush_from_port(P),
     ok.
 
@@ -2548,7 +2588,7 @@ otp_14175(_Config) ->
           keeeeeeeeeeeeeeeeeee => v5},
     "#{...}" = p(M, 1),
     mt("#{kaaaaaaaaaaaaaaaaaaaa => v1,...}", p(M, 2)),
-    mt("#{kaaaaaaaaaaaaaaaaaaaa => 1,kbbbbbbbbbbbbbbbbbbbb => 2,...}",
+    mt("#{kaaaaaaaaaaaaaaaaaaaa => v1,kbbbbbbbbbbbbbbbbbbbb => v2,...}",
        p(M, 3)),
 
     mt("#{kaaaaaaaaaaaaaaaaaaa => v1,kbbbbbbbbbbbbbbbbbbb => v2,\n"
@@ -2562,10 +2602,10 @@ otp_14175(_Config) ->
        "  kccccccccccccccccccc => v3,kddddddddddddddddddd => v4,\n"
        "  keeeeeeeeeeeeeeeeeee => v5}", p(M, 6)),
 
-    weak("#{aaaaaaaaaaaaaaaaaaa => 1,bbbbbbbbbbbbbbbbbbbb => 2,\n"
+    weak("#{aaaaaaaaaaaaaaaaaaa => 1,\nbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb => 2,\n"
          "  cccccccccccccccccccc => {3},\n"
          "  dddddddddddddddddddd => 4,eeeeeeeeeeeeeeeeeeee => 5}",
-       p(#{aaaaaaaaaaaaaaaaaaa => 1,bbbbbbbbbbbbbbbbbbbb => 2,
+       p(#{aaaaaaaaaaaaaaaaaaa => 1,bbbbbbbbbbbbbbbbbbbbbbbbbbbbbb => 2,
            cccccccccccccccccccc => {3},
            dddddddddddddddddddd => 4,eeeeeeeeeeeeeeeeeeee => 5}, -1)),
 
@@ -2574,22 +2614,12 @@ otp_14175(_Config) ->
            {eeeeeeeeeeeeeeeeeeee} => 5},
     "#{...}" = p(M2, 1),
     weak("#{dddddddddddddddddddd => {...},...}", p(M2, 2)),
-    weak("#{dddddddddddddddddddd => {1},{...} => 2,...}", p(M2, 3)),
+    weak("#{dddddddddddddddddddd => {1},\n"
+         "{aaaaaaaaaaaaaaaaaaaa} => 2,...}", p(M2, 3)),
 
     weak("#{dddddddddddddddddddd => {1},\n"
-         "  {aaaaaaaaaaaaaaaaaaaa} => 2,\n"
-         "  {...} => 3,...}", p(M2, 4)),
-
-    weak("#{dddddddddddddddddddd => {1},\n"
-         "  {aaaaaaaaaaaaaaaaaaaa} => 2,\n"
-         "  {bbbbbbbbbbbbbbbbbbbb} => 3,\n"
-         "  {...} => 4,...}", p(M2, 5)),
-
-    weak("#{dddddddddddddddddddd => {1},\n"
-         "  {aaaaaaaaaaaaaaaaaaaa} => 2,\n"
-         "  {bbbbbbbbbbbbbbbbbbbb} => 3,\n"
-         "  {cccccccccccccccccccc} => 4,\n"
-         "  {...} => 5}", p(M2, 6)),
+         "  aaaaaaaaaaaaaaaaaaaa => 2,\n"
+         "  bbbbbbbbbbbbbbbbbbbb => 3,...}", p(M2, 4)),
 
     weak("#{dddddddddddddddddddd => {1},\n"
          "  {aaaaaaaaaaaaaaaaaaaa} => 2,\n"
@@ -2603,16 +2633,16 @@ otp_14175(_Config) ->
            kddddddddddddddddddd => vyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy,
            keeeeeeeeeeeeeeeeeee => vzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz},
 
-    mt("#{aaaaaaaaaaaaaaaaaaaa =>\n"
-       "      uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu,\n"
-       "  bbbbbbbbbbbbbbbbbbbb =>\n"
+    mt("#{kaaaaaaaaaaaaaaaaaaaa =>\n"
+       "      vuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu,\n"
+       "  kbbbbbbbbbbbbbbbbbbbb =>\n"
        "      vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv,\n"
-       "  cccccccccccccccccccc =>\n"
-       "      xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,\n"
-       "  dddddddddddddddddddd =>\n"
-       "      yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy,\n"
-       "  eeeeeeeeeeeeeeeeeeee =>\n"
-       "      zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz}", p(M3, -1)),
+       "  kcccccccccccccccccccc =>\n"
+       "      vxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,\n"
+       "  kdddddddddddddddddddd =>\n"
+       "      vyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy,\n"
+       "  keeeeeeeeeeeeeeeeeeee =>\n"
+       "      vzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz}", p(M3, -1)),
 
     R4 = {c,{c,{c,{c,{c,{c,{c,{c,{c,{c,{c,{c,a,b},b},b},b},b},b},
 			 b},b},b},b},b},b},
@@ -2624,10 +2654,10 @@ otp_14175(_Config) ->
 
     weak("#{aaaaaaaaaaaaaaaaaaaa =>\n"
          "      #c{f1 = #c{f1 = #c{...},f2 = b},f2 = b},\n"
-         "  bbbbbbbbbbbbbbbbbbbb => #c{f1 = #c{f1 = {...},...},f2 = b},\n"
-         "  cccccccccccccccccccc => #c{f1 = #c{...},f2 = b},\n"
-         "  dddddddddddddddddddd => #c{f1 = {...},...},\n"
-         "  eeeeeeeeeeeeeeeeeeee => #c{...}}", p(M4, 7)),
+         "  bbbbbbbbbbbbbbbbbbbb =>\n #c{f1 = #c{f1 = #c{...},f2 = b},f2 = b},\n"
+         "  cccccccccccccccccccc =>\n #c{f1 = #c{f1 = #c{...},f2 = b},f2 = b},\n"
+         "  dddddddddddddddddddd =>\n #c{f1 = #c{f1 = #c{...},f2 = b},f2 = b},\n"
+         "  eeeeeeeeeeeeeeeeeeee =>\n #c{f1 = #c{f1 = #c{...},f2 = b},f2 = b}", p(M4, 7)),
 
     M5 = #{aaaaaaaaaaaaaaaaaaaa => R4},
     mt("#{aaaaaaaaaaaaaaaaaaaa =>\n"
@@ -2667,8 +2697,14 @@ otp_14175(_Config) ->
 -ifdef(WEAK).
 
 weak(S, R) ->
-    (nl(S) =:= nl(R) andalso
-     dots(S) =:= dots(S)).
+    case nl(S) =:= nl(R) andalso dots(S) =:= dots(R) of
+        true ->
+            ok;
+        false ->
+            io:format("Exp: ~ts~nGot: ~ts~nExpNL: ~w GotNL: ~w~nExpDots: ~w GotDots: ~w",
+                      [S,R,nl(S),nl(R),dots(S),dots(R)]),
+            exit({badmatch, S,R})
+    end.
 
 nl(S) ->
     [C || C <- S, C =:= $\n].
@@ -2679,7 +2715,7 @@ dots(S) ->
 -else. % WEAK
 
 weak(S, R) ->
-    mt(S, R).
+    true = mt(S, R).
 
 -endif. % WEAK
 
@@ -2695,12 +2731,20 @@ weak(S, R) ->
 -ifdef(EXACT).
 
 mt(S, R) ->
-    S =:= R.
+    true = S =:= R.
 
 -else. % EXACT
 
 mt(S, R) ->
-    anon(S) =:= anon(R).
+    S1 = anon(S),
+    S2 = anon(R),
+    case S1 =:= S2 of
+        true ->
+            ok;
+        false ->
+            io:format("Exp: ~ts~nGot: ~ts~nAExp: ~w~nAGot: ~w~n", [S,R,S1,S2]),
+            exit({badmatch, S,R})
+    end.
 
 anon(S) ->
     {ok, Ts0, _} = erl_scan:string(S, 1, [text]),
@@ -3011,8 +3055,8 @@ otp_15076(_Config) ->
     ok = bad_io_lib_format("~c", [a]),
     L = io_lib:scan_format("~c", [a]),
     {"~c", [a]} = io_lib:unscan_format(L),
-    {'EXIT', {badarg, _}} = (catch io_lib:build_text(L)),
-    {'EXIT', {badarg, _}} = (catch io_lib:build_text(L, [])),
+    ?assertError(badarg, io_lib:build_text(L)),
+    ?assertError(badarg, io_lib:build_text(L, [])),
     ok.
 
 otp_15639(_Config) ->
@@ -3325,3 +3369,170 @@ build_text_without_maps_order(_Config) ->
         width => none
     },
     [["1"]] = io_lib:build_text([FormatSpec]).
+
+-record #empty{}.
+-record #vector{x, y}.
+-record #order{zzzz=0, true=1, aaaaaaaaaaaaaaaaaaaaa=2, wwww=3}.
+
+native_records(_Config) ->
+    "#io_SUITE:empty{}" = fmt("~w", [#empty{}]),
+
+    "#io_SUITE:vector{x = 1,y = 2}" = fmt("~w", [#vector{x=1, y=2}]),
+    "..." = fmt("~W", [#vector{x=1, y=2}, 0]),
+    "#io_SUITE:vector{...}" = fmt("~W", [#vector{x=1, y=2}, 1]),
+    "#io_SUITE:vector{x = 1,...}" = fmt("~W", [#vector{x=1, y=2}, 2]),
+
+    "#io_SUITE:order{zzzz = 0,true = 1,aaaaaaaaaaaaaaaaaaaaa = 2,wwww = 3}" = fmt("~w", [#order{}]),
+
+    "#io_SUITE:order{zzzz = #io_SUITE:empty{},true = 1,"
+        "aaaaaaaaaaaaaaaaaaaaa = #io_SUITE:vector{x = 0.0,y = 10.0},wwww = 3}" =
+        fmt("~w", [#order{zzzz = #empty{}, aaaaaaaaaaaaaaaaaaaaa = #vector{x = 0.0, y = 10.0}}]),
+
+    "#io_SUITE:order{zzzz = #io_SUITE:empty{},true = 1,"
+        "aaaaaaaaaaaaaaaaaaaaa = #io_SUITE:vector{...},...}" =
+        fmt("~W", [#order{zzzz = #empty{}, aaaaaaaaaaaaaaaaaaaaa = #vector{x = 0.0, y = 10.0}}, 4]),
+
+    %% ~p and ~P
+    "..." = p(#empty{}, 0),
+    "#io_SUITE:empty{}" = p(#empty{}, 1),
+    "#io_SUITE:vector{...}" = p(#vector{x = 0, y = 0}, 1),
+    "#io_SUITE:vector{x = 0,y = 0}" = p(#vector{x = 0, y = 0}, -1),
+
+    """
+#io_SUITE:order{
+    zzzz = 0,true = 1,
+    aaaaaaaaaaaaaaaaaaaaa =
+        #io_SUITE:vector{
+            x = "Align fields in record names, we want y to match x",
+            y = 1},
+    wwww = 3}
+""" = p(#order{aaaaaaaaaaaaaaaaaaaaa = #vector{x = "Align fields in record names, we want y to match x", y = 1}}, -1),
+
+"""
+#io_SUITE:order{
+             zzzz = 0,
+             true =
+                 #io_SUITE:order{
+                     zzzz = 0,true = "break aligned to the correct column",
+                     aaaaaaaaaaaaaaaaaaaaa = 2,wwww = 3},
+             aaaaaaaaaaaaaaaaaaaaa =
+                 "A very long string can be here and how is that handled",
+             wwww =
+                 #io_SUITE:order{
+                     zzzz = 0,true = 1,aaaaaaaaaaaaaaaaaaaaa = 2,wwww = 3}}
+""" = p(#order{true = #order{true = "break aligned to the correct column"},
+               aaaaaaaaaaaaaaaaaaaaa = "A very long string can be here and how is that handled",
+               wwww = #order{}}, 10, 80, -1),
+    ok.
+
+%% There used to be a bug where an empty map would be printed as #{...} when using io_lib:bwrite.
+format_w_empty_map(_Config) ->
+    "[1,#{},2]" = fmt("~w", [[1, #{}, 2]]),
+    "{a,#{},b}" = fmt("~w", [{a, #{}, b}]),
+    "#{a => #{},b => #{}}" = fmt("~kw", [#{a => #{}, b => #{}}]).
+
+%% There used to be a bug where the map order operator within a record would be broken causing the format to crash.
+write_record_maps_order(_Config) ->
+    R = #vector{x = #{a => 1, b => 2}, y = 1},
+    "#io_SUITE:vector{x = #{a => 1,b => 2},y = 1}" = fmt("~kw",[R]),
+    ok.
+
+%% There used to be a bug where the latin1 encoding would be ignored for record modules and names.
+write_record_latin1_encoding(_Config) ->
+    ModName = list_to_atom([16#4e2d]),
+    RecName = list_to_atom([16#6587]),
+    R = records:create(ModName, RecName, [], #{is_exported => false}),
+    "#'\\x{4E2D}':'\\x{6587}'{}" = fmt("~w", [R]),
+    ok.
+
+cover_fread(_Config) ->
+    {[-42], ""} = fread_good("~d", "-42"),
+    {[537], ""} = fread_good("int:~4d", "int: 537"),
+    integer = fread_bad("~10d", "abc"),
+
+    {[42], ""} = fread_good("~u", "42"),
+    {[1,27,31,505043], ""} =
+        fread_good("~2u ~8u ~16u ~36u",
+                   "1 33 1F atoz"),
+
+    format = fread_bad("~0u", "\n"),
+    format = fread_bad("~1u", "\n"),
+    format = fread_bad("~37u", "\n"),
+    unsigned = fread_bad("~u", "-42\n"),
+
+    {[1,27,31,505043], ""} =
+        fread_good("~#;~#;~#;~#",
+                   "2#1;8#33;16#1F;36#atoz"),
+    {[5,27,31,395], ""} =
+        fread_good("~5#;~4#;~5#;~5#",
+                   "2#101;8#33;16#1F;36#az"),
+    based = fread_bad("~#", "0#"),
+    based = fread_bad("~#", "1#"),
+    based = fread_bad("~#", "37#"),
+    based = fread_bad("~0#", "\n"),
+    based = fread_bad("~4#", "100#abcdef"),
+    based = fread_bad("~4#", "-99#abcdef"),
+    based = fread_bad("~9#", "99#\nabcdef"),
+
+    {[-1,+1,+1], "7"} = fread_good("~- ~- ~-", "- + 7"),
+
+    {["string"], "  "} = fread_good("~s", "   string  "),
+    {["str"], "ing  "} = fread_good("~3s", "string  "),
+    {["string"], "  "} = fread_good("~ts", "   string  "),
+    {["str"], "ing  "} = fread_good("~3ts", "string  "),
+    {["строка"], "  "} = fread_good("~ts", "   строка  "),
+    {["стр"], "ока  "} = fread_good("~3ts", "строка  "),
+    string = fread_bad("~s", "плохо"),
+
+    {[atom], ""} = fread_good("~a", "  atom"),
+    {[at], "om"} = fread_good("~2a", "atom"),
+    {['атом'], ""} = fread_good("~ta", "атом"),
+    atom = fread_bad("~a", "плохо"),
+
+    {[42.0,107.0], ""} = fread_good("~f ~f", "42.0   1.07e+2"),
+    {[42.0,107.0], ""} = fread_good("~4f ~7f", "42.0 1.07E+2"),
+    float = fread_bad("~f", "0"),
+    float = fread_bad("~f", ".0"),
+    float = fread_bad("~2f", "100.0"),
+
+    {["a","bc","def",7,"ghi"], ""} =
+        fread_good("~c~2c ~3c~l ~3c", "abc def ghi"),
+    character = fread_bad("~c", "плохо"),
+
+    {[150.0], ""} = fread_good("~~ ~f", "~       1.5E+2"),
+
+    {["def"], ""} = fread_good("~*3c ~s", "abc    def"),
+
+    ok.
+
+fread_good(Format, String) ->
+    {ok,Term,Remaining} = io_lib:fread(Format, String),
+    fread_float_not_accepted(Format, String, []),
+    {Term,Remaining}.
+
+fread_bad(Format, String) ->
+    {error,{fread,Hint}} = io_lib:fread(Format, String),
+    Hint.
+
+fread_float_not_accepted(Format, [C|Cs], Prefix) ->
+    String = lists:reverse(Prefix) ++ [float(C)|Cs],
+    case io_lib:fread(Format, String) of
+        {error,{fread,_}} ->
+            ok;
+        {ok,_Terms,[H|T]}=Result when is_integer(H) ->
+            %% We accept the success if the float is hidden
+            %% in the leftover part of the input.
+            case [F || F <- T, is_float(F)] of
+                [_] ->
+                    ok;
+                [] ->
+                    io:format("io_lib:fread(~p, ~p) should fail;\n"
+                              "but returned ~p\n",
+                              [Format,String,Result]),
+                    error(failed)
+            end
+    end,
+    fread_float_not_accepted(Format, Cs, [C|Prefix]);
+fread_float_not_accepted(_, [], _) ->
+    ok.
+

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -169,8 +169,12 @@
 					/* Bad key in map */
 #define EXC_BADRECORD		((20 << EXC_OFFSET) | EXC_ERROR)
 					/* Bad key in map */
+#define EXC_BADFIELD		((21 << EXC_OFFSET) | EXC_ERROR)
+					/* Bad field in native record */
+#define EXC_NOVALUE		((22 << EXC_OFFSET) | EXC_ERROR)
+					/* Missing value in native record */
 
-#define NUMBER_EXIT_CODES 21	/* The number of exit code indices */
+#define NUMBER_EXIT_CODES 23	/* The number of exit code indices */
 
 /*
  * Internal pseudo-error codes.

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1998-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -964,6 +964,11 @@ print_op(fmtfn_t to, void *to_arg, int op, int size, BeamInstr* addr)
     case op_update_map_assoc_cdtI:
     case op_update_map_exact_xjdtI:
     case op_update_map_exact_yjdtI:
+    case op_i_create_native_record_cdtI:
+    case op_i_create_local_native_record_qdtI:
+    case op_i_update_native_record_sdtI:
+    case op_i_get_record_elements_fxI:
+    case op_i_get_record_elements_fyI:
 	{
 	    int n = unpacked[-1];
 

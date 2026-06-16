@@ -22,6 +22,7 @@
 -module(unicode_util_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, suite/0, extra/1,
          uppercase/1, lowercase/1, titlecase/1, casefold/1,
@@ -29,7 +30,7 @@
          nfd/1, nfc/1, nfkd/1, nfkc/1,
          whitespace/1,
          get/1,
-         lookup/1,
+         lookup/1, category/1, is_id_func/1,
          count/1]).
 
 -export([debug/0, id/1, bin_split/1, uc_loaded_size/0,
@@ -47,6 +48,8 @@ all() ->
      cp, gc,
      nfd, nfc, nfkd, nfkc,
      whitespace,
+     category,
+     is_id_func,
      get,
      lookup,
      count
@@ -91,9 +94,12 @@ casefold(_) ->
     [[$s,$s]] = unicode_util:casefold([$ẞ]),
     ok.
 
-whitespace(_) ->
-    WS = unicode_util:whitespace(),
-    WS = lists:filter(fun unicode_util:is_whitespace/1, WS),
+whitespace(_Config) ->
+    %% Pattern whitespace
+    WS = lists:sort(unicode_util:pattern_whitespace()),
+    %% is_whitespace are an extended subset of pattern_whitespace
+    %% (more tested in the unicode module)
+    WS = lists:sort(lists:filter(fun unicode_util:is_whitespace/1, WS) ++ [8206,8207]),
     false = unicode_util:is_whitespace($A),
     ok.
 
@@ -106,13 +112,13 @@ cp(_) ->
     {error, <<128>>} = Get(<<128>>),
     {error, [<<128>>, 0]} = Get([<<128>>, 0]),
 
-    {'EXIT', _} = catch Get([-1]),
-    {'EXIT', _} = catch Get([-1, $a]),
-    {'EXIT', _} = catch Get([foo, $a]),
-    {'EXIT', _} = catch Get([-1, $a]),
-    {'EXIT', _} = catch Get([[], -1]),
-    {'EXIT', _} = catch Get([[-1], $a]),
-    {'EXIT', _} = catch Get([[-1, $a], $a]),
+    ?assertError(_, Get([-1])),
+    ?assertError(_, Get([-1, $a])),
+    ?assertError(_, Get([foo, $a])),
+    ?assertError(_, Get([-1, $a])),
+    ?assertError(_, Get([[], -1])),
+    ?assertError(_, Get([[-1], $a])),
+    ?assertError(_, Get([[-1, $a], $a])),
 
     ok.
 
@@ -126,14 +132,14 @@ gc(Config) ->
     {error, <<128>>} = Get(<<128>>),
     {error, [<<128>>, 0]} = Get([<<128>>, 0]),
 
-    {'EXIT', _} = catch Get([-1]),
-    {'EXIT', _} = catch Get([-1, $a]),
-    {'EXIT', _} = catch Get([foo, $a]),
-    {'EXIT', _} = catch Get([-1, $a]),
-    {'EXIT', _} = catch Get([[], -1]),
-    {'EXIT', _} = catch Get([[-1], $a]),
-    {'EXIT', _} = catch Get([[-1, $a], $a]),
-    {'EXIT', _} = catch Get([<<$a>>, [-1, $a], $a]), %% Current impl
+    ?assertError(_, Get([-1])),
+    ?assertError(_, Get([-1, $a])),
+    ?assertError(_, Get([foo, $a])),
+    ?assertError(_, Get([-1, $a])),
+    ?assertError(_, Get([[], -1])),
+    ?assertError(_, Get([[-1], $a])),
+    ?assertError(_, Get([[-1, $a], $a])),
+    ?assertError(_, Get([<<$a>>, [-1, $a], $a])), %% Current impl
 
     0 = fold(fun verify_gc/3, 0, DataDir ++ "/GraphemeBreakTest.txt"),
     ok.
@@ -368,6 +374,28 @@ check_category(Id, [{Next,_}|_] = Rest, Es) ->
 check_category(_Id, [], Es) ->
     Es.
 
+category(_Config) ->
+    Check = fun(Id) ->
+                    LC = maps:get(category, unicode_util:lookup(Id)),
+                    LC == unicode_util:category(Id)
+            end,
+    [] = [Id || Id <- lists:seq(1, 200000), not Check(Id)],
+    ?assertError(_, unicode_util:category(-1)),
+    ?assertError(_, unicode_util:category(5000000)),
+    ?assertError(_, unicode_util:category(foobar)),
+    ok.
+
+is_id_func(_Config) ->
+    %% Basic tests more tests in unicode tests
+    false = unicode_util:is_other_id_start($a),
+    true = unicode_util:is_other_id_start(6277),
+
+    false = unicode_util:is_other_id_continue($a),
+    true = unicode_util:is_other_id_continue(183),
+
+    false = unicode_util:is_letter_not_pattern_syntax(11823),
+    true = unicode_util:is_letter_not_pattern_syntax($a),
+    ok.
 
 count(Config) ->
     Parent = self(),

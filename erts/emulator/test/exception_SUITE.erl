@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -878,9 +878,11 @@ error_info(_Config) ->
          {exit, 1},
 
          {exit, [a, b]},
-         {exit_signal, [a, b]},
          {exit, [Pid, bye, [blipp]]},
          {exit, [garbage, bye, [priority]]},
+         {exit_signal, [a, b]},
+         {exit_signal, [Pid, bye, [blipp]]},
+         {exit_signal, [garbage, bye, [priority]]},
 
          {external_size, [a], [no_fail]},
          {external_size, [abc, xyz]},
@@ -940,10 +942,14 @@ error_info(_Config) ->
          {is_builtin, [1, 2, a]},
          {is_function, [abc, bad_arity]},
          {is_function, [abc, -1]},
+         {is_integer, [5, a, b]},
          {is_map_key, [key, not_map]},
          {is_process_alive, [abc]},
+
+         {is_record, 1},                        %Can't fail.
          {is_record, [not_tuple,42]},
-         {is_record, [not_tuple,42,bad_size]},
+         {is_record, [not_tuple,mod,42.0]},
+
          {length, [abc]},
          {link, [42]},
          {link, [DeadProcess]},

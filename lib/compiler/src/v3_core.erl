@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -82,6 +82,8 @@
 -module(v3_core).
 -moduledoc false.
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 -export([module/2,format_error/1]).
 
 -import(lists, [all/2,any/2,append/1,droplast/1,duplicate/2,
@@ -93,7 +95,7 @@
 -import(ordsets, [add_element/2,del_element/2,is_element/2,
 		  union/1,union/2,intersection/2,subtract/2]).
 -import(cerl, [ann_c_cons/3,ann_c_tuple/2,c_tuple/1,
-	       ann_c_map/3,cons_hd/1,cons_tl/1]).
+               ann_c_map/3,ann_c_record/4,cons_hd/1,cons_tl/1]).
 
 -include("core_parse.hrl").
 
@@ -167,6 +169,7 @@
 -record(core, {vcount=0 :: non_neg_integer(),	%Variable counter
 	       fcount=0 :: non_neg_integer(),	%Function counter
                gcount=0 :: non_neg_integer(),   %Goto counter
+               module :: module(),                %Module name.
 	       function={none,0} :: fa(),	%Current function.
 	       in_guard=false :: boolean(),	%In guard or not.
 	       wanted=true :: boolean(),	%Result wanted or not.
@@ -176,6 +179,7 @@
                file=[{file,""}],                %File.
                load_nif=false :: boolean()      %true if calls erlang:load_nif/2
 	      }).
+-type state() :: #core{}.
 
 %% XXX: The following type declarations do not belong in this module
 -type fa()        :: {atom(), arity()}.
@@ -212,7 +216,7 @@ module(Forms0, Opts) ->
 	  end,
     Cexp = [#c_var{name=FA} || {_,_}=FA <:- Exp],
     Kfs1 = reverse(Kfs0),
-    Kfs = if LoadNif and (Nifs =:= none) ->
+    Kfs = if LoadNif, Nifs =:= none ->
                   insert_nif_start(Kfs1);
              true ->
                   Kfs1
@@ -225,7 +229,7 @@ form({function,_,_,_,_}=F0,
      #imodule{defs=Defs,load_nif=LoadNif0}=Module,
      Opts) ->
     {F,Ws,LoadNif} = function(F0, Module, Opts),
-    Module#imodule{defs=[F|Defs],ws=Ws,load_nif=LoadNif or LoadNif0};
+    Module#imodule{defs=[F|Defs],ws=Ws,load_nif=LoadNif orelse LoadNif0};
 form({attribute,_,module,Mod}, Module, _Opts) ->
     true = is_atom(Mod),
     Module#imodule{name=Mod};
@@ -271,9 +275,10 @@ defined_functions(Forms) ->
 
 function({function,_,Name,Arity,Cs0}, Module, Opts)
   when is_integer(Arity), 0 =< Arity, Arity =< 255 ->
-    #imodule{file=File, ws=Ws0, nifs=Nifs} = Module,
+    #imodule{name=Mod, file=File, ws=Ws0, nifs=Nifs} = Module,
     try
-        St0 = #core{vcount=0,function={Name,Arity},opts=Opts,
+        St0 = #core{vcount=0,module=Mod,function={Name,Arity},
+                    opts=Opts,
                     dialyzer=member(dialyzer, Opts),
                     ws=Ws0,file=[{file,File}]},
         {Cs1,Anno} = handle_debug_line(Cs0, St0),
@@ -500,6 +505,7 @@ gexpr_test({atom,L,false}, Bools, St0) ->
     {#c_literal{anno=lineno_anno(L, St0),val=false},[],Bools,St0};
 gexpr_test(E0, Bools0, St0) ->
     {E1,Eps0,St1} = expr(E0, St0),
+
     %% Generate "top-level" test and argument calls.
     case E1 of
         #icall{anno=Anno,module=#c_literal{val=erlang},
@@ -712,12 +718,13 @@ expr({cons,L,H0,T0}, St0) ->
     {annotate_cons(A, H1, T1, St1),Eps,St1};
 expr({lc,L,E,Qs0}, St0) ->
     {Qs1,St1} = preprocess_quals(L, Qs0, St0),
-    lc_tq(L, E, Qs1, #c_literal{anno=lineno_anno(L, St1),val=[]}, St1);
+    {Lc, Pre, _OptInfo, St2} = lc_tq(L, {lc, wrap_list(E)}, Qs1, #c_literal{anno=lineno_anno(L, St1),val=[]}, St1),
+    {Lc, Pre, St2};
 expr({bc,L,E,Qs}, St) ->
     bc_tq(L, E, Qs, St);
 expr({mc,L,E,Qs0}, St0) ->
     {Qs1,St1} = preprocess_quals(L, Qs0, St0),
-    mc_tq(L, E, Qs1, #c_literal{anno=lineno_anno(L, St1),val=[]}, St1);
+    mc_tq(L, wrap_list(E), Qs1, #c_literal{anno=lineno_anno(L, St1),val=[]}, St1);
 expr({tuple,L,Es0}, St0) ->
     {Es1,Eps,St1} = safe_list(Es0, St0),
     A = record_anno(L, St1),
@@ -726,6 +733,11 @@ expr({map,L,Es0}, St0) ->
     map_build_pairs(#c_literal{val=#{}}, Es0, full_anno(L, St0), St0);
 expr({map,L,M,Es}, St) ->
     expr_map(M, Es, L, St);
+expr({record,L,Id,Es0}, St0) ->
+    record_build_pairs(#c_literal{val=empty}, #c_literal{val=Id}, Es0,
+                       full_anno(L, St0), St0);
+expr({record,L,S,Id,Es}, St) ->
+    expr_record(S, #c_literal{val=Id}, Es, L, St);
 expr({bin,L,Es0}, St0) ->
     try expr_bin(Es0, full_anno(L, St0), St0) of
 	{_,_,_}=Res -> Res
@@ -960,6 +972,14 @@ expr({match,L,P0,E0}, St0) ->
     end;
 expr({single_match,L,P,#c_var{}=E}, St0) ->
     single_match(L, P, E, St0);
+expr({record_field=Op,Loc,Src0,Id,F0}, St0) ->
+    {Src,Aps0,St1} = safe(Src0, St0),
+    {F,Aps1,St2} = safe(F0, St1),
+    PrimOp = #iprimop{anno=#a{anno=lineno_anno(Loc, St0)},
+                      name=#c_literal{val=Op},
+                      args=[Src,#c_literal{val=Id},F]},
+    Aps = Aps0 ++ Aps1,
+    {PrimOp,Aps,St2};
 expr({op,_,'++',{lc,Llc,E,Qs0},More}, St0) ->
     %% Optimise '++' here because of the list comprehension algorithm.
     %%
@@ -969,7 +989,7 @@ expr({op,_,'++',{lc,Llc,E,Qs0},More}, St0) ->
     %% number variables in the environment for letrec.
     {Mc,Mps,St1} = safe(More, St0),
     {Qs,St2} = preprocess_quals(Llc, Qs0, St1),
-    {Y,Yps,St} = lc_tq(Llc, E, Qs, Mc, St2),
+    {Y,Yps,_OptInfo,St} = lc_tq(Llc, {lc, wrap_list(E)}, Qs, Mc, St2),
     {Y,Mps++Yps,St};
 expr({op,_,'andalso',_,_}=E0, St0) ->
     {op,L,'andalso',E1,E2} = right_assoc(E0, 'andalso'),
@@ -1084,6 +1104,7 @@ set_wanted(_, St) -> St.
 %%
 %%      {{X,Y},[Z]}
 
+-spec sanitize(erl_parse:af_pattern()) -> erl_parse:af_pattern().
 sanitize({match,L,P1,P2}) ->
     {tuple,L,[sanitize(P1),sanitize(P2)]};
 sanitize({cons,L,H,T}) ->
@@ -1096,6 +1117,9 @@ sanitize({bin,L,Segs0}) ->
     {tuple,L,Segs};
 sanitize({map,L,Ps0}) ->
     Ps = [sanitize(V) || {map_field_exact,_,_,V} <- Ps0],
+    {tuple,L,Ps};
+sanitize({record,L,_,Ps0}) ->
+    Ps = [sanitize(V) || {record_field,_,_,V} <- Ps0],
     {tuple,L,Ps};
 sanitize({op,L,_Name,P1,P2}) ->
     {tuple,L,[sanitize(P1),sanitize(P2)]};
@@ -1189,6 +1213,96 @@ maybe_warn_repeated_keys(Ck, K0, Used, St) ->
 
 map_op(map_field_assoc) -> #c_literal{val=assoc};
 map_op(map_field_exact) -> #c_literal{val=exact}.
+
+expr_record(R0, Id, Es0, L, St0) ->
+    {R1,Eps0,St1} = safe_record(R0, St0),
+    BadRecord = badrecord_term(R1, St1),
+    A = lineno_anno(L, St1),
+    Fc = fail_clause([], [{eval_failure,badrecord}|A], BadRecord),
+    {R2,Eps1,St2} = record_build_pairs(R1, Id, Es0, full_anno(L, St1), St1),
+    R3 = case Es0 of
+             [] -> R1;
+             [_|_] -> R2
+         end,
+    {R4,St3} = expr_record_id(A, R1, R3, Id, St2),
+
+    Cs = [#iclause{anno=#a{anno=[compiler_generated|A]},
+                   pats=[],
+                   guard=[#icall{anno=#a{anno=A},
+                                 module=#c_literal{anno=A,val=erlang},
+                                 name=#c_literal{anno=A,val=is_record},
+                                 args=[R1]}],
+                   body=[R4]}],
+    Eps = Eps0 ++ Eps1,
+    {#icase{anno=#a{anno=A},args=[],clauses=Cs,fc=Fc},Eps,St3}.
+
+expr_record_id(A, Rec, Body0, #c_literal{val={Mod0,Name0}}, St0) ->
+    %% External access.
+    Mod = #c_literal{val=Mod0},
+    Name = #c_literal{val=Name0},
+    Args = [Rec,Mod,Name],
+    {Body,St} = expr_record_accessible(A, Rec, Body0, external, St0),
+    expr_record_id_1(A, Rec, Body, Args, St);
+expr_record_id(A, Rec, Body, #c_literal{val=[]}, St) ->
+    expr_record_accessible(A, Rec, Body, auto_local, St);
+expr_record_id(A, Rec, Body, #c_literal{val=Name}, St) when is_atom(Name) ->
+    %% Local access.
+    Args = [Rec,#c_literal{val=St#core.module},#c_literal{val=Name}],
+    expr_record_id_1(A, Rec, Body, Args, St).
+
+expr_record_id_1(A, Rec, Body, Args, St) ->
+    Cs = [#iclause{anno=#a{anno=[compiler_generated|A]},
+                   pats=[],
+                   guard=[#iprimop{name=#c_literal{anno=A,val=is_native_record},
+                                   args=Args}],
+                   body=[Body]}],
+    BadRecord = badrecord_term(Rec, St),
+    Fc = fail_clause([], [{eval_failure,badrecord}|A], BadRecord),
+    {#icase{anno=#a{anno=A},args=[],clauses=Cs,fc=Fc},St}.
+
+expr_record_accessible(A, Rec, Body, Scope, St) ->
+    Cs = [#iclause{anno=#a{anno=[compiler_generated|A]},
+                   pats=[],
+                   guard=[#iprimop{anno=#a{anno=A},
+                                   name=#c_literal{anno=A,val=is_record_accessible},
+                                   args=[Rec,#c_literal{val=Scope}]}],
+                   body=[Body]}],
+    BadRecord = badrecord_term(Rec, St),
+    Fc = fail_clause([], [{eval_failure,badrecord}|A], BadRecord),
+    {#icase{anno=#a{anno=A},args=[],clauses=Cs,fc=Fc},St}.
+
+safe_record(R0, St0) ->
+   case safe(R0, St0) of
+       {#c_var{},_,_}=Res ->
+           Res;
+       {NotRecord,Eps0,St1} ->
+           %% Not a native record. There will be a syntax error if we
+           %% try to pretty-print the Core Erlang code and then try
+           %% to parse it. To avoid the syntax error, force the term
+           %% into a variable.
+           {V,St2} = new_var(St1),
+           Anno = cerl:get_ann(NotRecord),
+           Eps1 = [#iset{anno=#a{anno=Anno},var=V,arg=NotRecord}],
+           {V,Eps0++Eps1,St2}
+   end.
+
+badrecord_term(Record, #core{in_guard=false}) ->
+    c_tuple([#c_literal{val=badrecord},Record]).
+
+record_build_pairs(Arg, Id, Es0, Ann, St0) ->
+    {Es,Pre,_,St1} = record_build_pairs_1(Es0, sets:new(), St0),
+    {ann_c_record(Ann, Arg, Id, Es),Pre,St1}.
+
+record_build_pairs_1([{record_field,L,K0,V0}|Es], Used0, St0) ->
+    {K,Pre0,St1} = safe(K0, St0),
+    {V,Pre1,St2} = safe(V0, St1),
+    {Pairs,Pre2,Used1,St3} = record_build_pairs_1(Es, Used0, St2),
+    As = lineno_anno(L, St3),
+    %% Need to check if a field exists?
+    Pair = cerl:ann_c_record_pair(As, K, V),
+    {[Pair|Pairs],Pre0++Pre1++Pre2,Used1,St3};
+record_build_pairs_1([], Used, St) ->
+    {[],[],Used,St}.
 
 %% try_exception([ExcpClause], St) -> {[ExcpVar],Handler,St}.
 
@@ -1626,23 +1740,86 @@ fun_tq(Cs0, L, St0, NameInfo) ->
 		vars=Args,clauses=Cs2,fc=Fc,name=NameInfo},
     {Fun,[],St4}.
 
-%% lc_tq(Line, Exp, [Qualifier], Mc, State) -> {LetRec,[PreExp],State}.
+wrap_list(List) when is_list(List) -> List;
+wrap_list(Other) -> [Other].
+
+%% lc_tq(Line, Ctx, [Qualifier], Mc, State) -> {LetRec,[PreExp],OptInfo,State}.
+%%  Ctx = {lc, Es} (list comprehension)
+%%      | {mc, Pairs, BoundVars} (map comprehension context)
+%%  OptInfo = none | {from_keys, ValueExpr} | from_list
 %%  This TQ from Simon PJ pp 127-138.
 
-lc_tq(Line, E, [#igen{}|_T] = Qs, Mc, St) ->
-    lc_tq1(Line, E, Qs, Mc, St);
-lc_tq(Line, E, [#izip{}=Zip|Qs], Mc, St) ->
-    zip_tq(Line, E, Zip, Mc, St, Qs);
-lc_tq(Line, E, [#ifilter{}=Filter|Qs], Mc, St) ->
-    filter_tq(Line, E, Filter, Mc, St, Qs, fun lc_tq/5);
-lc_tq(Line, E0, [], Mc0, St0) ->
-    {H1,Hps,St1} = safe(E0, St0),
-    {T1,Tps,St} = force_safe(Mc0, St1),
-    Anno = lineno_anno(Line, St),
-    E = ann_c_cons(Anno, H1, T1),
-    {set_anno(E, [compiler_generated|Anno]),Hps ++ Tps,St}.
+lc_tq(Line, Ctx, [#igen{}|_T] = Qs, Mc, St) ->
+    lc_tq1(Line, Ctx, Qs, Mc, St);
+lc_tq(Line, Ctx, [#izip{}=Zip|Qs], Mc, St) ->
+    zip_tq(Line, Ctx, Zip, Mc, St, Qs);
+lc_tq(Line, Ctx, [#ifilter{}=Filter|Qs], Mc, St) ->
+    filter_tq(Line, Ctx, Filter, Mc, St, Qs, fun lc_tq/5);
+lc_tq(Line, Ctx, [], Mc0, St0) ->
+    {Values,Pre,Opt,St} = lc_tq2(Ctx, St0),
+    {T1,Tps,St1} = force_safe(Mc0, St),
+    Anno = lineno_anno(erl_anno:set_generated(true, Line), St1),
+    E = ann_c_cons_all(Anno, Values, T1),
+    {E, Pre ++ Tps, Opt, St1}.
 
-lc_tq1(Line, E, [#igen{anno=#a{anno=GA}=GAnno,
+lc_tq2({mc,Pairs,BoundVars}, St) ->
+    mc_pairs(Pairs, BoundVars, [], [], first, St);
+lc_tq2({lc,Es}, St0) ->
+    {Values,Pre,St1} = safe_list(Es, St0),
+    {Values,Pre,none,St1}.
+
+%% mc_pairs(Pairs, BoundVars, Keys, Pre, PrevVal, State) ->
+%%     {Keys,Pre,OptInfo,State}.
+%%  Verifies if it's safe to use maps:from_keys in the comprehension.
+%%  The conditions are:
+%%   1. All values are exactly the same, if comprehension has multiple values
+%%   2. Value is safe
+%%   3. Value is simple (no pre-expressions generated)
+%%   4. Value doesn't use any variables bound in generators
+mc_pairs([{map_field_assoc,Lf,Key,Val}|Pairs], BoundVars, Keys, Pre, PrevVal, St0) ->
+    {ValExpr,ValPre,St1} = expr(Val, St0),
+    {KeyExpr,KeyPre,St2} = safe(Key, St1),
+    case is_safe(ValExpr) andalso ValPre =:= [] andalso
+         not uses_bound_vars(ValExpr, BoundVars) andalso
+         (PrevVal =:= first orelse is_safe_same(ValExpr, PrevVal)) of
+        true ->
+            mc_pairs(Pairs, BoundVars, [KeyExpr|Keys], KeyPre ++ Pre, ValExpr, St2);
+        false ->
+            {ValExpr1,ValPre1,St3} = force_safe(ValExpr, St2),
+            Anno = lineno_anno(Lf, St3),
+            Tuple = ann_c_tuple(Anno, [KeyExpr,ValExpr1]),
+            Tuples = case PrevVal of
+                         first -> [Tuple];
+                         _ -> [Tuple|[ann_c_tuple(Anno, [K,PrevVal]) || K <- Keys]]
+                     end,
+            mc_tuples(Pairs, Tuples, ValPre ++ ValPre1 ++ KeyPre ++ Pre, St3)
+    end;
+mc_pairs([], _BoundVars, Keys, Pre, PrevVal, St) ->
+    {lists:reverse(Keys),Pre,{from_keys,PrevVal},St}.
+
+%% mc_tuples(Pairs, Tuples, Pre, State) -> {Tuples,Pre,from_list,State}.
+%%  Build tuples for the from_list path.
+mc_tuples([{map_field_assoc,Lf,Key,Val}|Pairs], Tuples, Pre, St0) ->
+    {Tuple,Pre1,St1} = safe({tuple,Lf,[Key,Val]}, St0),
+    mc_tuples(Pairs, [Tuple|Tuples], Pre ++ Pre1, St1);
+mc_tuples([], Tuples, Pre, St) ->
+    {lists:reverse(Tuples),Pre,from_list,St}.
+
+is_safe_same(#c_cons{hd=Hd1,tl=Tl1}, #c_cons{hd=Hd2,tl=Tl2}) ->
+    is_safe_same(Hd1, Hd2) andalso is_safe_same(Tl1, Tl2);
+is_safe_same(#c_tuple{es=Es1}, #c_tuple{es=Es2}) ->
+    length(Es1) =:= length(Es2) andalso
+        all(fun({E1,E2}) -> is_safe_same(E1, E2) end, lists:zip(Es1, Es2));
+is_safe_same(#c_var{name=N1}, #c_var{name=N2}) -> N1 =:= N2;
+is_safe_same(#c_literal{val=V1}, #c_literal{val=V2}) -> V1 =:= V2;
+is_safe_same(_, _) -> false.
+
+ann_c_cons_all(Anno, [H | Hs], T) ->
+    ann_c_cons(Anno, H, ann_c_cons_all(Anno, Hs, T));
+ann_c_cons_all(_Anno, [], T) ->
+    T.
+
+lc_tq1(Line, Ctx, [#igen{anno=#a{anno=GA}=GAnno,
 		      acc_pat=AccPat,acc_guard=AccGuard,
                       nomatch_pat=NomatchPat,
                       nomatch_mode=NomatchMode,
@@ -1667,7 +1844,8 @@ lc_tq1(Line, E, [#igen{anno=#a{anno=GA}=GAnno,
     NomatchClause = make_clause([nomatch_clause,compiler_generated|LA],
                                 NomatchPat, [], [], [Nc]),
     TailClause = make_clause(LA, TailPat, [], [], [Mc]),
-    {Lc,Lps,St3} = lc_tq(Line, E, Qs, Sc, St2),
+    Ctx1 = add_bound_vars(Ctx, AccPat),
+    {Lc,Lps,OptInfo,St3} = lc_tq(Line, Ctx1, Qs, Sc, St2),
     AccClause = make_clause(LA, AccPat, [], AccGuard, Lps ++ [Lc]),
     AccClauseNoGuards = if
                             AccGuard =:= [] ->
@@ -1692,10 +1870,10 @@ lc_tq1(Line, E, [#igen{anno=#a{anno=GA}=GAnno,
     Fun = #ifun{anno=GAnno,id=[],vars=[Var],clauses=Cs,fc=Fc},
     {#iletrec{anno=GAnno#a{anno=[list_comprehension|GA]},defs=[{{Name,1},Fun}],
               body=Pre ++ [#iapply{anno=GAnno,op=F,args=[Arg]}]},
-     [],St3}.
+     [],OptInfo,St3}.
 
-%% zip_tq(Line, Exp, [Qualifier], Mc, State, TqFun) -> {LetRec,[PreExp],State}.
-zip_tq(Line, E, #izip{anno=#a{anno=GA}=GAnno,
+%% zip_tq(Line, Ctx, Zip, Mc, State, Qs) -> {LetRec,[PreExp],OptInfo,State}.
+zip_tq(Line, Ctx, #izip{anno=#a{anno=GA}=GAnno,
                       acc_pats=AccPats,acc_guard=AccGuard,
                       nomatch_total=NomatchTotal,
                       skip_pats=SkipPats,
@@ -1717,7 +1895,8 @@ zip_tq(Line, E, #izip{anno=#a{anno=GA}=GAnno,
     %% Generate the clauses for the letrec. First, the accumulating
     %% clause.
     Sc = #iapply{anno=GAnno,op=F,args=TailVars},
-    {Lc,Lps,St4} = lc_tq(Line, E, Qs, Sc, St3),
+    Ctx1 = lists:foldl(fun(Pat, C) -> add_bound_vars(C, Pat) end, Ctx, AccPats),
+    {Lc,Lps,OptInfo,St4} = lc_tq(Line, Ctx1, Qs, Sc, St3),
     AccClause = make_clause(LA, AccPats, AccGuard, Lps++[Lc]),
 
     %% Generate the skip clause unless all generators are strict, in
@@ -1746,7 +1925,7 @@ zip_tq(Line, E, #izip{anno=#a{anno=GA}=GAnno,
     {#iletrec{anno=GAnno#a{anno=[list_comprehension|GA]},
               defs=[{{Name,NumGenerators},Fun}],
               body=append(Pres) ++
-                  [#iapply{anno=GAnno,op=F,args=Args}]},[],St4}.
+                  [#iapply{anno=GAnno,op=F,args=Args}]},[],OptInfo,St4}.
 
 %% bc_tq(Line, Exp, [Qualifier], More, State) -> {LetRec,[PreExp],State}.
 %%  This TQ from Gustafsson ERLANG'05.
@@ -1832,7 +2011,12 @@ bc_tq1(Line, E, [#igen{anno=#a{anno=GA}=GAnno,
 bc_tq1(Line, E, [#izip{}=Zip|Qs], Mc, St) ->
     bzip_tq1(Line, E, Zip, Mc, St, Qs);
 bc_tq1(Line, E, [#ifilter{}=Filter|Qs], Mc, St) ->
-    filter_tq(Line, E, Filter, Mc, St, Qs, fun bc_tq1/5);
+    TqFun = fun(L, {lc, Expr}, Qs1, Mc1, St1) ->
+                    {Bc, Bps, St2} = bc_tq1(L, Expr, Qs1, Mc1, St1),
+                    {Bc, Bps, none, St2}
+            end,
+    {Res, Pre, _OptInfo, St1} = filter_tq(Line, {lc, E}, Filter, Mc, St, Qs, TqFun),
+    {Res, Pre, St1};
 bc_tq1(_, {bin,Bl,Elements}, [], AccVar, St0) ->
     bc_tq_build(Bl, [], AccVar, Elements, St0);
 bc_tq1(Line, E0, [], AccVar, St0) ->
@@ -1927,15 +2111,25 @@ bzip_tq1(Line, E, #izip{anno=#a{anno=_GA}=GAnno,
               body=append(Pres) ++
                   [#iapply{anno=LAnno,op=F,args=Args++[Mc]}]},[],St4}.
 
-mc_tq(Line, {map_field_assoc,Lf,K,V}, Qs, Mc, St0) ->
-    E = {tuple,Lf,[K,V]},
-    {Lc,Pre0,St1} = lc_tq(Line, E, Qs, Mc, St0),
-    {LcVar,St2} = new_var(St1),
+mc_tq(Line, Pairs, Qs, Mc, St0) ->
+    {Lc, Pre0, OptInfo, St1} = lc_tq(Line, {mc, Pairs, []}, Qs, Mc, St0),
+    {LcVar, St2} = new_var(St1),
+    Anno = #a{anno=lineno_anno(Line, St2)},
     Pre = Pre0 ++ [#iset{var=LcVar,arg=Lc}],
-    Call = #icall{module=#c_literal{val=maps},
-                  name=#c_literal{val=from_list},
-                  args=[LcVar]},
-    {Call,Pre,St2}.
+    case OptInfo of
+        {from_keys, ValueExpr} ->
+            Call = #icall{anno=Anno,
+                          module=#c_literal{val=maps},
+                          name=#c_literal{val=from_keys},
+                          args=[LcVar, ValueExpr]},
+            {Call, Pre, St2};
+        from_list ->
+            Call = #icall{anno=Anno,
+                          module=#c_literal{val=maps},
+                          name=#c_literal{val=from_list},
+                          args=[LcVar]},
+            {Call, Pre, St2}
+    end.
 
 make_refill([nomatch|RefillPats], Index, [_|Bodies], Args) ->
     make_refill(RefillPats, Index + 1, Bodies, Args);
@@ -1966,13 +2160,15 @@ make_clause(Anno, Pat, PatExtra, Guard, Body) ->
 %%  Transform an intermediate comprehension filter to its intermediate case
 %%  representation.
 
-filter_tq(Line, E, #ifilter{anno=#a{anno=LA}=LAnno,arg={Pre,Arg}},
+filter_tq(Line, Ctx0, #ifilter{anno=#a{anno=LA}=LAnno,arg={Pre,Arg}},
           Mc, St0, Qs, TqFun) ->
     %% The filter is an expression, it is compiled to a case of degree 1 with
     %% 3 clauses, one accumulating, one skipping and the final one throwing
     %% {case_clause,Value} where Value is the result of the filter and is not a
     %% boolean.
-    {Lc,Lps,St1} = TqFun(Line, E, Qs, Mc, St0),
+    %% Variables bound in Pre are visible in subsequent qualifiers and the body.
+    Ctx = add_pre_bound_vars(Ctx0, Pre),
+    {Lc,Lps,OptInfo,St1} = TqFun(Line, Ctx, Qs, Mc, St0),
     {FailPat,St2} = new_var(St1),
     Fc = fail_clause([FailPat], LA,
                      c_tuple([#c_literal{val=bad_filter},FailPat])),
@@ -1984,18 +2180,18 @@ filter_tq(Line, E, #ifilter{anno=#a{anno=LA}=LAnno,arg={Pre,Arg}},
                               pats=[#c_literal{val=false}],guard=[],
                               body=[Mc]}],
             fc=Fc},
-     Pre,St2};
-filter_tq(Line, E, #ifilter{anno=#a{anno=LA}=LAnno,arg=Guard},
+     Pre,OptInfo,St2};
+filter_tq(Line, Ctx, #ifilter{anno=#a{anno=LA}=LAnno,arg=Guard},
           Mc, St0, Qs, TqFun) when is_list(Guard) ->
     %% Otherwise it is a guard, compiled to a case of degree 0 with 2 clauses,
     %% the first matches if the guard succeeds and the comprehension continues
     %% or the second one is selected and the current element is skipped.
-    {Lc,Lps,St1} = TqFun(Line, E, Qs, Mc, St0),
+    {Lc,Lps,OptInfo,St1} = TqFun(Line, Ctx, Qs, Mc, St0),
     {#icase{anno=LAnno#a{anno=[list_comprehension|LA]},args=[],
             clauses=[#iclause{anno=LAnno,pats=[],guard=Guard,body=Lps ++ [Lc]}],
             fc=#iclause{anno=LAnno#a{anno=[compiler_generated|LA]},
                         pats=[],guard=[],body=[Mc]}},
-     [],St1}.
+     [],OptInfo,St1}.
 
 %% preprocess_quals(Line, [Qualifier], State) -> {[Qualifier'],State}.
 %%  Preprocess a list of Erlang qualifiers into its intermediate representation,
@@ -2090,6 +2286,7 @@ get_nomatch_total(NomatchModes) ->
             end
         end.
 
+is_generator({match,_,_,_}) -> true;
 is_generator({generate,_,_,_}) -> true;
 is_generator({generate_strict,_,_,_}) -> true;
 is_generator({b_generate,_,_,_}) -> true;
@@ -2189,6 +2386,8 @@ get_qual_anno(Abstract) -> element(2, Abstract).
 %% generator(Line, Generator, Guard, State) -> {Generator',State}.
 %%  Transform a given generator into its #igen{} representation.
 
+generator(Line, {match,L,P,E}, Gs, StrictPats, St0) ->
+    generator(Line, {generate_strict,L,P,{cons,L,E,{nil,L}}}, Gs, StrictPats, St0);
 generator(Line, {Generate,Lg,P0,E}, Gs, StrictPats, St0)
   when Generate =:= generate;
        Generate =:= generate_strict ->
@@ -2576,6 +2775,37 @@ is_safe(#c_var{name=_}) -> true;                %Ordinary variable.
 is_safe(#c_literal{}) -> true;
 is_safe(_) -> false.
 
+%% add_bound_vars(Ctx, Pat) -> Ctx.
+%%  Add pattern vars to mc context (no-op for lc).
+%%  When Pat is 'nomatch', set BoundVars to 'nomatch' to disable optimization.
+add_bound_vars({lc, E}, _Pat) -> {lc, E};
+add_bound_vars({mc, Pairs, _BoundVars}, nomatch) -> {mc, Pairs, nomatch};
+add_bound_vars({mc, Pairs, nomatch}, _AccPat) -> {mc, Pairs, nomatch};
+add_bound_vars({mc, Pairs, BoundVars}, AccPat) ->
+    NewVars = lit_vars(AccPat),
+    {mc, Pairs, ordsets:union(NewVars, BoundVars)}.
+
+%% add_pre_bound_vars(Ctx, Pre) -> Ctx.
+%%  Add variables bound in pre-expressions (from filters) to mc context.
+add_pre_bound_vars({lc, E}, _Pre) -> {lc, E};
+add_pre_bound_vars({mc, Pairs, BoundVars}, Pre) ->
+    NewVars = ordsets:union([pre_expr_vars(E) || E <- Pre]),
+    {mc, Pairs, ordsets:union(NewVars, BoundVars)}.
+
+%% pre_bound_vars(Pre) -> ordset([Name]).
+%%  Extract variables bound in a list of pre-expressions.
+pre_expr_vars(#iset{var=#c_var{name=N}}) -> [N];
+pre_expr_vars(#imatch{pat=Pat}) -> lit_vars(Pat);
+pre_expr_vars(_) -> [].
+
+%% uses_bound_vars(Expr, BoundVars) -> boolean().
+%%  Check if a Core expression uses any of the bound variables.
+%%  When BoundVars is 'nomatch', always return true to disable optimization.
+uses_bound_vars(_Expr, nomatch) -> true;
+uses_bound_vars(Expr, BoundVars) ->
+    FreeVars = cerl_trees:free_variables(Expr),
+    not ordsets:is_disjoint(ordsets:from_list(FreeVars), BoundVars).
+
 %% fold_match(MatchExpr, Pat) -> {MatchPat,Expr}.
 %%  Fold nested matches into one match with aliased patterns.
 
@@ -2605,6 +2835,9 @@ pattern({tuple,L,Ps}, St) ->
 pattern({map,L,Pairs}, St0) ->
     {Ps,St1} = pattern_map_pairs(Pairs, St0),
     {#imap{anno=#a{anno=lineno_anno(L, St1)},es=Ps},St1};
+pattern({record,L,Id,Pairs}, St0) ->
+    {Ps,St1} = pattern_record_pairs(Pairs, St0),
+    {#c_record{anno=lineno_anno(L, St1),id=#c_literal{val=Id},es=Ps},St1};
 pattern({bin,L,Ps}, St0) ->
     {Segments,St} = pat_bin(Ps, St0),
     {#ibinary{anno=#a{anno=lineno_anno(L, St)},segments=Segments},St};
@@ -2685,6 +2918,18 @@ map_sort_key(Key, KeyMap) ->
         _ ->
             {expr,map_size(KeyMap)}
     end.
+
+-spec pattern_record_pairs([erl_parse:af_record_field(erl_parse:af_pattern())], state()) ->
+          {[cerl:c_record_pair()], state()}.
+pattern_record_pairs(Ps, St0) ->
+    mapfoldl(fun pattern_record_pair/2, St0, Ps).
+
+-spec pattern_record_pair(erl_parse:af_record_field(erl_parse:af_pattern()), state()) ->
+          {cerl:c_record_pair(), state()}.
+pattern_record_pair({record_field, L, K, V}, St0) ->
+    {Ck, St1} = pattern(K, St0),
+    {Cv, St2} = pattern(V, St1),
+    {#c_record_pair{anno=lineno_anno(L, St1),key=Ck,val=Cv},St2}.
 
 %% pat_bin([BinElement], State) -> [BinSeg].
 
@@ -2997,6 +3242,7 @@ annotate_cons(A, H, T, #core{dialyzer=Dialyzer}) ->
 %%%
 
 -record(known, {base=[],ks=[],prev_ks=[]}).
+-type known() :: #known{}.
 
 known_init() ->
     #known{}.
@@ -3459,6 +3705,12 @@ upattern(#c_alias{var=V0,pat=P0}=Alias, Ks, St0) ->
     {V1,Vg,Vv,Vu,St1} = upattern(V0, Ks, St0),
     {P1,Pg,Pv,Pu,St2} = upattern(P0, known_union(Ks, Vv), St1),
     {Alias#c_alias{var=V1,pat=P1},Vg ++ Pg,union(Vv, Pv),union(Vu, Pu),St2};
+upattern(#c_record{es=Es0}=Rec, Ks, St0) ->
+    {Es1,Esg,Esv,Eus,St1} = upattern_list(Es0, Ks, St0),
+    {Rec#c_record{es=Es1},Esg,Esv,Eus,St1};
+upattern(#c_record_pair{val=V0}=Pair, Ks, St0) ->
+    {V,Vg,Vn,Vu,St1} = upattern(V0, Ks, St0),
+    {Pair#c_record_pair{val=V},Vg,Vn,Vu,St1};
 upattern(Other, _, St) -> {Other,[],[],[],St}.	%Constants
 
 %% upattern_list([Pat], [KnownVar], State) ->
@@ -3623,6 +3875,9 @@ ren_pat(#c_alias{var=Var0,pat=Pat0}=Alias, Ks, {_,_}=Subs0, St0) ->
 ren_pat(#imap{es=Es0}=Map, Ks, {_,_}=Subs0, St0) ->
     {Es,Subs,St} = ren_pat_map(Es0, Ks, Subs0, St0),
     {Map#imap{es=Es},Subs,St};
+ren_pat(#c_record{es=Es0}=Rec, Ks, {_,_}=Subs0, St0) ->
+    {Es,Subs,St} = ren_pat_record(Es0, Ks, Subs0, St0),
+    {Rec#c_record{es=Es},Subs,St};
 ren_pat(#ibinary{segments=Es0}=P, Ks, {Isub,Osub0}, St0) ->
     {Es,_Isub,Osub,St} = ren_pat_bin(Es0, Ks, Isub, Osub0, St0),
     {P#ibinary{segments=Es},{Isub,Osub},St};
@@ -3655,6 +3910,15 @@ ren_pat_map([#imappair{val=Val0}=MapPair|Es0], Ks, Subs0, St0) ->
     {Es,Subs,St} = ren_pat_map(Es0, Ks, Subs1, St1),
     {[MapPair#imappair{val=Val}|Es],Subs,St};
 ren_pat_map([], _Ks, Subs, St) ->
+    {[],Subs,St}.
+
+-spec ren_pat_record([cerl:c_record_pair()], known(), {[iset()], [iset()]}, state()) ->
+          {[cerl:c_record_pair()], {[iset()], [iset()]}, state()}.
+ren_pat_record([#c_record_pair{val=Val0}=RecPair|Es0], Ks, Subs0, St0) ->
+    {Val,Subs1,St1} = ren_pat(Val0, Ks, Subs0, St0),
+    {Es,Subs,St} = ren_pat_record(Es0, Ks, Subs1, St1),
+    {[RecPair#c_record_pair{val=Val}|Es],Subs,St};
+ren_pat_record([], _Ks, Subs, St) ->
     {[],Subs,St}.
 
 ren_get_subst([#c_var{name=V}]=Old, Sub) ->
@@ -3724,6 +3988,8 @@ cpattern(#c_tuple{es=Es}=Tup) ->
     Tup#c_tuple{es=cpattern_list(Es)};
 cpattern(#imap{anno=#a{anno=Anno},es=Es}) ->
     #c_map{anno=Anno,es=cpat_map_pairs(Es),is_pat=true};
+cpattern(#c_record{es=Es}=Rec) ->
+    Rec#c_record{es=cpat_record_pairs(Es)};
 cpattern(#ibinary{anno=#a{anno=Anno},segments=Segs0}) ->
     Segs = [cpat_bin_seg(S) || S <- Segs0],
     #c_binary{anno=Anno,segments=Segs};
@@ -3735,6 +4001,13 @@ cpat_map_pairs([#imappair{anno=#a{anno=Anno},op=Op,key=Key0,val=Val0}|T]) ->
     Pair = #c_map_pair{anno=Anno,op=Op,key=Key,val=Val},
     [Pair|cpat_map_pairs(T)];
 cpat_map_pairs([]) -> [].
+
+-spec cpat_record_pairs([cerl:c_record_pair()]) -> [cerl:c_record_pair()].
+cpat_record_pairs([#c_record_pair{val=Val0}=Pair0|T]) ->
+    Val = cpattern(Val0),
+    Pair = Pair0#c_record_pair{val=Val},
+    [Pair|cpat_record_pairs(T)];
+cpat_record_pairs([]) -> [].
 
 cpat_bin_seg(#ibitstr{anno=#a{anno=Anno},val=E,size=Sz0,unit=Unit,
                       type=Type,flags=Flags}) ->
@@ -3997,6 +4270,7 @@ skip_lowering(#c_call{}, _A) -> skip;
 skip_lowering(#c_cons{}, _A) -> skip;
 skip_lowering(#c_literal{}, _A) -> skip;
 skip_lowering(#c_map{}, _A) -> skip;
+skip_lowering(#c_record{}, _A) -> skip;
 skip_lowering(#c_opaque{}, _A) -> skip;
 skip_lowering(#c_primop{}, _A) -> skip;
 skip_lowering(#c_tuple{}, _A) -> skip;
@@ -4280,6 +4554,8 @@ split_pat(#c_binary{anno=Anno0,segments=Segs0}=Bin, St0) ->
     end;
 split_pat(#c_map{es=Es}=Map, St) ->
     split_map_pat(Es, Map, St, []);
+split_pat(#c_record{es=Es}=Str, St) ->
+    split_record_pat(Es, Str, St, []);
 split_pat(#c_var{}, _) ->
     none;
 split_pat(#c_alias{pat=Pat}=Alias0, St0) ->
@@ -4336,6 +4612,18 @@ split_map_pat([#c_map_pair{key=Key,val=Val}=E0|Es], Map0, St0, Acc) ->
             {BefMap,Split,St1}
     end;
 split_map_pat([], _, _, _) -> none.
+
+split_record_pat([#c_record_pair{val=Val}=E0|Es], Rec0, St0, Acc) ->
+    case split_pat(Val, St0) of
+        none ->
+            split_record_pat(Es, Rec0, St0, [E0|Acc]);
+        {Ps,Split,St1} ->
+            {Var,St} = new_var(St1),
+            E = E0#c_record_pair{val=Var},
+            Rec = Rec0#c_record{es=reverse(Acc, [E|Es])},
+            {Rec,{split, [Var],Ps,Split},St}
+    end;
+split_record_pat([], _, _, _) -> none.
 
 eval_map_key(#c_var{}, _E, _Es, _Map, _St) ->
     none;
@@ -4506,8 +4794,10 @@ lit_vars(#c_tuple{es=Es}, Vs) -> lit_list_vars(Es, Vs);
 lit_vars(#c_map{arg=V,es=Es}, Vs) -> lit_vars(V, lit_list_vars(Es, Vs));
 lit_vars(#c_map_pair{key=K,val=V}, Vs) -> lit_vars(K, lit_vars(V, Vs));
 lit_vars(#c_var{name=V}, Vs) -> add_element(V, Vs);
+lit_vars(#c_alias{var=#c_var{name=V},pat=P}, Vs) -> add_element(V, lit_vars(P, Vs));
 lit_vars(#imap{es=Es}, Vs) -> lit_list_vars(Es, Vs);
 lit_vars(#imappair{key=K,val=V}, Vs) -> lit_list_vars(K, lit_vars(V, Vs));
+lit_vars(#ibinary{segments=Segs}, Vs) -> ibitstr_vars(Segs, Vs);
 lit_vars(_, Vs) -> Vs.				%These are atomic
 
 lit_list_vars(Ls) -> lit_list_vars(Ls, []).
@@ -4580,6 +4870,8 @@ is_simple(#c_tuple{es=Es}) -> is_simple_list(Es);
 is_simple(#c_map{es=Es}) -> is_simple_list(Es);
 is_simple(#c_map_pair{key=K,val=V}) ->
     is_simple(K) andalso is_simple(V);
+is_simple(#c_record{es=Es}) -> is_simple_list(Es);
+is_simple(#c_record_pair{val=V}) -> is_simple(V);
 is_simple(_) -> false.
 
 -spec is_simple_list([cerl:cerl()]) -> boolean().

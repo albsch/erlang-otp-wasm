@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1999-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1999-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -64,7 +64,6 @@
 #endif
 
 erts_atomic32_t erts_active_bp_index;
-erts_atomic32_t erts_staging_bp_index;
 
 /* Pseudo export entries. Never filled in with data, only used to
    yield unique pointers of the correct type. */
@@ -2911,8 +2910,6 @@ init_sys_msg_dispatcher(void)
     erts_cnd_init(&smq_cnd);
     erts_mtx_init(&smq_mtx, "sys_msg_q", NIL,
         ERTS_LOCK_FLAGS_PROPERTY_STATIC | ERTS_LOCK_FLAGS_CATEGORY_DEBUG);
-    if (erts_single_threaded)
-        return; /* no OS threads in single-threaded mode; see erl_init.c */
     erts_thr_create(&sys_msg_dispatcher_tid,
 			sys_msg_dispatcher_func,
 			NULL,
@@ -3538,7 +3535,8 @@ erts_tracer_update_impl(ErtsTracer *tracer, ErtsTracer new_tracer)
         hp = hf->mem + 2;
         hf->used_size -= (sizeof(ErtsThrPrgrLaterOp)+sizeof(Eterm)-1)/sizeof(Eterm) + 1;
         *tracer = copy_struct(tracer_state, sz, &hp, &hf->off_heap);
-        *tracer = CONS(hf->mem, tracer_module, *tracer);
+        hp = hf->mem;
+        *tracer = CONS(hp, tracer_module, *tracer);
         ASSERT((void*)(((char*)(ptr_val(*tracer)) - offsetof(ErlHeapFragment, mem))) == hf);
     }
 }

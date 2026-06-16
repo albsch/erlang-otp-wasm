@@ -62,7 +62,7 @@ APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 # FLAGS
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += -I$(ERL_TOP)/lib/stdlib/include \
-  -Werror
+  -Werror +warn_obsolete_bool_op +nowarn_deprecated_catch
 
 # ----------------------------------------------------
 # Targets
@@ -76,6 +76,8 @@ clean:
 
 docs:
 
+regenerate:
+	erlc +deterministic -o yeccparser.erl yeccgramm.yrl
 
 # ----------------------------------------------------
 # Special Build Targets
@@ -102,3 +104,8 @@ release_spec: opt
 
 release_docs_spec:
 
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+DEP_SKIP_FILES=yeccparser.erl
+include $(ERL_TOP)/make/dep.mk

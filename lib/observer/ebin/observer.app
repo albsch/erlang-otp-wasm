@@ -21,7 +21,7 @@
 %%
 {application, observer,
    [{description, "OBSERVER version 1"},
-    {vsn, "2.18.2"},
+    {vsn, "2.19"},
     {modules, [crashdump_viewer,
 	       cdv_atom_cb,
 	       cdv_bin_cb,

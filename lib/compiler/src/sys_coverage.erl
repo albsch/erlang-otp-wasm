@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -23,6 +23,9 @@
 
 -module(sys_coverage).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 -export([module/2,cover_transform/2,beam_debug_info/1]).
 -import(lists, [duplicate/2,member/2,reverse/1,reverse/2]).
 
@@ -511,16 +514,15 @@ munge_expr({call,Anno,Expr,Exprs}, Vars0) ->
     {MungedExprs, Vars2} = munge_args(Exprs, Vars1),
     {{call,Anno,MungedExpr,MungedExprs}, Vars2};
 munge_expr({lc,Anno,Expr,Qs}, Vars0) ->
-    {MungedExpr, Vars1} = munge_expr(?BLOCK1(Expr), Vars0),
+    {MungedExpr, Vars1} = munge_comprehension(Expr, Vars0),
     {MungedQs, Vars2} = munge_qualifiers(Qs, Vars1),
     {{lc,Anno,MungedExpr,MungedQs}, Vars2};
 munge_expr({bc,Anno,Expr,Qs}, Vars0) ->
     {MungedExpr,Vars1} = munge_expr(?BLOCK1(Expr), Vars0),
     {MungedQs, Vars2} = munge_qualifiers(Qs, Vars1),
     {{bc,Anno,MungedExpr,MungedQs}, Vars2};
-munge_expr({mc,Anno,{map_field_assoc,FAnno,K,V},Qs}, Vars0) ->
-    Expr = {map_field_assoc,FAnno,?BLOCK1(K),?BLOCK1(V)},
-    {MungedExpr, Vars1} = munge_expr(Expr, Vars0),
+munge_expr({mc,Anno,Expr,Qs}, Vars0) ->
+    {MungedExpr, Vars1} = munge_comprehension(Expr, Vars0),
     {MungedQs, Vars2} = munge_qualifiers(Qs, Vars1),
     {{mc,Anno,MungedExpr,MungedQs}, Vars2};
 munge_expr({block,Anno,Body}, Vars0) ->
@@ -608,6 +610,18 @@ is_atomic({integer,_,_}) -> true;
 is_atomic({nil,_}) -> true;
 is_atomic({var,_,_}) -> true;
 is_atomic(_) -> false.
+
+munge_comprehension([Expr|Exprs], Vars0) ->
+    {MungedExpr, Vars1} = munge_comprehension(Expr, Vars0),
+    {MungedExprs, Vars2} = munge_comprehension(Exprs, Vars1),
+    {[MungedExpr|MungedExprs], Vars2};
+munge_comprehension([], Vars) ->
+    {[], Vars};
+munge_comprehension({map_field_assoc,Anno,K,V}, Vars0) ->
+    Expr = {map_field_assoc,Anno,?BLOCK(K),?BLOCK(V)},
+    munge_expr(Expr, Vars0);
+munge_comprehension(Expr, Vars0) ->
+    munge_expr(?BLOCK1(Expr), Vars0).
 
 munge_exprs(Exprs, Vars) ->
     munge_exprs(Exprs, Vars, []).

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2020-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2020-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,6 +32,7 @@
 #include "erl_version.h"
 #include "beam_bp.h"
 #include "erl_debugger.h"
+#include "erl_record.h"
 
 #define CodeNeed(w) do {                                                \
     ASSERT(ci <= codev_size);                                           \
@@ -724,6 +725,22 @@ void beam_load_finalize_code(LoaderState* stp, struct erl_module_instance* inst_
         }
     }
 
+    {
+        BeamFile_RecordTable rec = stp->beam.record;
+        ErtsRecordEntry *entry;
+
+        for (int i = 0; i < rec.record_count; i++) {
+            Eterm def = beamfile_get_literal(&stp->beam,
+                                             rec.records[i].def_literal);
+            entry = erts_record_put(stp->module, rec.records[i].name);
+
+            entry->definitions[staging_ix] = def;
+        }
+
+        erts_free(ERTS_ALC_T_PREPARED_CODE, rec.records);
+        stp->beam.record.records = NULL;
+    }
+
 #ifdef DEBUG
     /* Ensure that we've loaded stubs for all BIFs in this module. */
     for (i = 0; i < BIF_SIZE; i++) {
@@ -948,7 +965,7 @@ int beam_load_emit_op(LoaderState *stp, BeamOp *tmp_op) {
                 break;
             case TAG_n:
                 ASSERT(tmp_op->a[arg].val == NIL);
-                /* ! Fall through ! */
+                ERTS_FALLTHROUGH();
             case TAG_a:
                 code[ci++] = tmp_op->a[arg].val;
                 break;
@@ -1510,16 +1527,22 @@ int beam_load_emit_op(LoaderState *stp, BeamOp *tmp_op) {
         }
         break;
 
-    case op_i_debug_line_It:
+    case op_i_debug_line_IIt:
+        if (code[ci-2]-1 >= stp->beam.debug.item_count) {
+            BeamLoadError2(stp,
+                           "debug_line index %u out of range (only %u entries)",
+                           code[ci-2]-1, stp->beam.debug.item_count);
+        }
+
         /* Each i_debug_line is a distinct instrumentation point and we don't
          * want to miss a single one of them (so they all can be selected),
          * so allow duplicates here.
          */
-        if (add_line_entry(stp, ci-3, code[ci-2], 1)) {
+        if (add_line_entry(stp, ci-4, code[ci-3], 1)) {
             goto load_error;
         }
 
-        ci -= 3;                /* Get rid of the instruction */
+        ci -= 4;                /* Get rid of the instruction */
         break;
 
         /* End of code found. */

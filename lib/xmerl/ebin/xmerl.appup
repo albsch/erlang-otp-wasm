@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"2.1.9",
+{"2.2",
  [{<<".*">>,[{restart_application, xmerl}]}],
  [{<<".*">>,[{restart_application, xmerl}]}]
 }.

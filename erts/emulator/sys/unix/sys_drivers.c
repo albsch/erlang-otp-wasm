@@ -1598,13 +1598,6 @@ static ErlDrvData forker_start(ErlDrvPort port_num, char* name,
 
     forker_port = erts_drvport2id(port_num);
 
-#ifdef __EMSCRIPTEN__
-    /* No fork()/execv()/socketpair() under Emscripten. External OS-process
-       ports are unsupported; skip erl_child_setup so the runtime can boot. */
-    forker_fd = -1;
-    return (ErlDrvData)port_num;
-#endif
-
     res = erts_sys_explicit_8bit_getenv("BINDIR", bindir, &bindirsz);
     if (res == 0) {
         erts_exit(1, "Environment variable BINDIR is not set\n");

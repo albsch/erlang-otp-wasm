@@ -30,6 +30,10 @@
 -module(ct_logs).
 -moduledoc false.
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {file, consult, 1}}]).
+
 -export([init/3, close/3, init_tc/1, end_tc/1]).
 -export([register_groupleader/2, unregister_groupleader/1]).
 -export([get_log_dir/0, get_log_dir/1]).
@@ -831,7 +835,7 @@ logger_loop(State) ->
 		end,
 	    if Importance >= (100-VLvl) ->
 		    CtLogFd = State#logger_state.ct_log_fd,
-		    DoEscChars = State#logger_state.tc_esc_chars and EscChars,
+		    DoEscChars = State#logger_state.tc_esc_chars andalso EscChars,
 		    case get_groupleader(Pid, GL, State) of
 			{tc_log,TCGL,TCGLs} ->
 			    case erlang:is_process_alive(TCGL) of
@@ -1503,8 +1507,8 @@ make_one_index_entry1(SuiteName, Link, Label, Success, Fail, UserSkip, AutoSkip,
 		 integer_to_list(NotBuilt),"</a></td>\n"]
 	end,
     FailStr =
-	if (Fail > 0) or (NotBuilt > 0) or
-	   ((Success+Fail+UserSkip+AutoSkip) == 0) ->  
+	if Fail > 0; NotBuilt > 0;
+	   Success+Fail+UserSkip+AutoSkip == 0 ->  
 		["<font color=\"red\">",
 		 integer_to_list(Fail),"</font>"];
 	   true ->
@@ -2294,8 +2298,8 @@ runentry(Dir, undefined, _) ->
 runentry(Dir, Totals={Node,Label,Logs,
 		      {TotSucc,TotFail,UserSkip,AutoSkip,NotBuilt}}, Index) ->
     TotFailStr =
-	if (TotFail > 0) or (NotBuilt > 0) or
-	   ((TotSucc+TotFail+UserSkip+AutoSkip) == 0) ->
+	if TotFail > 0; NotBuilt > 0;
+	   TotSucc+TotFail+UserSkip+AutoSkip == 0 ->
 		["<font color=\"red\">",
 		 integer_to_list(TotFail),"</font>"];
 	   true ->

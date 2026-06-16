@@ -329,9 +329,11 @@ suites(Version) when ?DTLS_1_X(Version) ->
     dtls_v1:suites(Version).
 
 all_suites(?TLS_1_3 = Version) ->
-    suites(Version) ++ tls_legacy_suites(?TLS_1_2)  ++ tls_v1:exclusive_suites(?TLS_1_0);
+    suites(Version) ++ tls_v1:aes_ccm_8_suites(Version) ++
+        tls_legacy_suites(?TLS_1_2)  ++ tls_v1:exclusive_suites(?TLS_1_0);
 all_suites(?TLS_1_2 = Version) ->
-    suites(Version) ++ tls_legacy_suites(Version) ++ tls_v1:exclusive_suites(?TLS_1_0);
+    suites(Version) ++ tls_v1:aes_ccm_8_suites(Version) ++
+        tls_legacy_suites(Version) ++ tls_v1:exclusive_suites(?TLS_1_0);
 all_suites(?TLS_1_1 = Version) ->
     suites(Version) ++ tls_legacy_suites(Version) ++ tls_v1:cbc_suites(Version);
 all_suites(?TLS_1_0 = Version) ->
@@ -895,8 +897,8 @@ hash_algorithm(?SHA224) -> sha224;
 hash_algorithm(?SHA256) -> sha256;
 hash_algorithm(?SHA384) -> sha384;
 hash_algorithm(?SHA512) -> sha512;
-hash_algorithm(Other)  when is_integer(Other) andalso ((Other >= 7) and (Other =< 223)) -> unassigned;
-hash_algorithm(Other)  when is_integer(Other) andalso ((Other >= 224) and (Other =< 255)) -> Other.
+hash_algorithm(Other)  when is_integer(Other), Other >= 7, Other =< 223 -> unassigned;
+hash_algorithm(Other)  when is_integer(Other), Other >= 224, Other =< 255 -> Other.
 
 sign_algorithm(anon)  -> ?ANON;
 sign_algorithm(rsa)   -> ?RSA;
@@ -906,8 +908,8 @@ sign_algorithm(?ANON) -> anon;
 sign_algorithm(?RSA) -> rsa;
 sign_algorithm(?DSA) -> dsa;
 sign_algorithm(?ECDSA) -> ecdsa;
-sign_algorithm(Other) when is_integer(Other) andalso ((Other >= 4) and (Other =< 223)) -> unassigned;
-sign_algorithm(Other) when is_integer(Other) andalso ((Other >= 224) and (Other =< 255)) -> Other.
+sign_algorithm(Other) when is_integer(Other), Other >= 4, Other =< 223 -> unassigned;
+sign_algorithm(Other) when is_integer(Other), Other >= 224, Other =< 255 -> Other.
 
 
 signature_algorithm_to_scheme(#'SignatureAlgorithm'{algorithm = ?'id-RSASSA-PSS',
@@ -1212,7 +1214,7 @@ rsa_suites_encipher(Ciphers) ->
 %% Cert should be have DSS key (DSA)
 dss_keyed_suites(Ciphers) ->
     filter_kex(Ciphers, fun (dhe_dss) -> true;
-                            (spr_dss) -> true;
+                            (srp_dss) -> true;
                             (_) ->  false
                         end).
 

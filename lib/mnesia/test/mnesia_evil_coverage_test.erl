@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -24,6 +24,8 @@
 -module(mnesia_evil_coverage_test).
 -author('hakan@erix.ericsson.se').
 -include("mnesia_test_lib.hrl").
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([init_per_testcase/2, end_per_testcase/2,
          init_per_group/2, end_per_group/2,
@@ -1474,12 +1476,11 @@ wait_for_tables(Config) when is_list(Config) ->
 
     ?match(stopped, erpc:call(Node2, mnesia, stop, [])),
     fun Wait () ->  %% Sync node_down
+            timer:sleep(200),
+            _ = mnesia_controller:get_info(1000),
             case mnesia:table_info(schema, active_replicas) of
                 [Node1] -> ok;
-                _ ->
-                    timer:sleep(100),
-                    _ = mnesia_controller:get_info(1000),
-                    Wait()
+                _ -> Wait()
             end
     end (),
     {ok, foo, _} = mnesia:activate_checkpoint([{name, foo}, {max, Tabs}, {ram_overrides_dump, true}]),
@@ -2503,9 +2504,11 @@ record_name_dirty_access(Storage, Config) ->
     ?match(ok, mnesia:dirty_delete_object(Tab, {RecName, 2, 21})),
 
     Tens = ?sort([{RecName, 1, 10}, {RecName, 3, 10}]),
+    RevTens = lists:reverse(Tens),
     TenPat = {RecName, '_', 10},
     ?match(Tens, ?sort(mnesia:dirty_match_object(Tab, TenPat))),
     ?match(Tens, ?sort(mnesia:dirty_select(Tab, [{TenPat, [], ['$_']}]))),
+    ?match(RevTens, lists:reverse(?sort(mnesia:dirty_select_reverse(Tab, [{TenPat, [], ['$_']}])))),
 
     %% Subscription test
     E = mnesia_table_event,
@@ -2537,6 +2540,10 @@ record_name_dirty_access(Storage, Config) ->
     ?match(Twos, ?sort(mnesia:dirty_select(Tab, 
 					   [{mnesia:table_info(Tab, wild_pattern),
 					     [],['$_']}]))),
+    RevTwos = lists:reverse(Twos),
+    ?match(RevTwos, lists:reverse(?sort(mnesia:dirty_select_reverse(Tab,
+					   [{mnesia:table_info(Tab, wild_pattern),
+					     [],['$_']}])))),
 
     %% Traverse backup test
 
@@ -2575,18 +2582,6 @@ record_name_dirty_access(Storage, Config) ->
     ?match(4711, mnesia:dirty_update_counter(CounterTab, C, 4700)),
     ?match([{some_counter, C, 4711}], mnesia:dirty_read(CounterTab, C)),
     ?match(0, mnesia:dirty_update_counter(CounterTab, C, -4747)),
-
-    %% Registry tests
-
-    RegTab = list_to_atom(lists:concat([Tab, "_registry"])),
-    RegTabDef = [{record_name, some_reg}],
-    ?match(ok, mnesia_registry:create_table(RegTab, RegTabDef)),
-    ?match(some_reg, mnesia:table_info(RegTab, record_name)),
-    {success, RegRecs} =
-	?match([_ | _], mnesia_registry_test:dump_registry(node(), RegTab)),
-
-    R = ?sort(RegRecs),
-    ?match(R, ?sort(mnesia_registry_test:restore_registry(node(), RegTab))),
 
     ?verify_mnesia(Nodes, []).
 

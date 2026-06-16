@@ -47,7 +47,7 @@
 -define(log(S,A), log(?MODULE_STRING,?LINE,S,A)).
 
 -include("wxe.hrl").
--include("../include/wx.hrl").
+-include_lib("wx/include/wx.hrl").
 
 %%====================================================================
 %% API
@@ -62,7 +62,8 @@ start(SilentStart) ->
 	    case gen_server:start(?MODULE, [SilentStart], []) of
 		{ok, Pid}  ->
 		    {ok, Ref} = gen_server:call(Pid, get_env, infinity),
-		    wx:set_env(Env = #wx_env{ref=Ref,sv=Pid}),
+                    Env = #wx_env{ref=Ref,sv=Pid},
+		    wx:set_env(Env),
 		    Env;
 		{error, {Reason, _Stack}} ->
 		    erlang:error(Reason)

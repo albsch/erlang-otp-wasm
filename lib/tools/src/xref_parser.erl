@@ -5,6 +5,9 @@
 -file("xref_parser.yrl", 110).
 -moduledoc false.
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 -export([t2s/1]).
 
 -import(lists, [concat/1, flatten/1]).
@@ -390,7 +393,7 @@ yecctoken2string1(Other) ->
 
 
 
--file("xref_parser.erl", 393).
+-file("xref_parser.erl", 396).
 
 -dialyzer({nowarn_function, yeccpars2/7}).
 -compile({nowarn_unused_function,  yeccpars2/7}).
@@ -2801,4 +2804,4 @@ yeccpars2_79_(__Stack0) ->
   end | __Stack].
 
 
--file("xref_parser.yrl", 307).
+-file("xref_parser.yrl", 310).

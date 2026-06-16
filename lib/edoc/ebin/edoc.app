@@ -9,7 +9,7 @@
 {application, edoc,
  [
   {description, "EDoc, the Erlang documentation engine"},
-  {vsn, "1.4.1"},
+  {vsn, "1.5"},
   {modules, [edoc,
 	     edoc_cli,
 	     edoc_data,

@@ -23,7 +23,7 @@
 #
 include $(ERL_TOP)/make/target.mk
 
-ERL_COMPILE_FLAGS += -W +warn_unused_vars
+ERL_COMPILE_FLAGS += -W +warn_unused_vars +warn_obsolete_bool_op
 
 ifeq ($(TYPE),debug)
 ERL_COMPILE_FLAGS += -Ddebug
@@ -72,7 +72,7 @@ ERL_COMPILE_FLAGS += -pa $(ERL_TOP)/lib/et/ebin \
 		     -pa $(ERL_TOP)/lib/wx/ebin \
 		     -I../include \
 		     -I $(ERL_TOP)/lib \
-		     -Werror
+		     -Werror +nowarn_deprecated_catch
 
 # ----------------------------------------------------
 # Special Build Targets
@@ -125,22 +125,6 @@ release_docs_spec:
 
 
 # ----------------------------------------------------
-# Include dependencies
+# Dependencies
 # ----------------------------------------------------
-
-$(EBIN)/et.$(EMULATOR): et.erl
-
-$(EBIN)/et_selector.$(EMULATOR): et_selector.erl ../include/et.hrl
-
-$(EBIN)/et_contents_viewer.$(EMULATOR): et_contents_viewer.erl ../include/et.hrl et_internal.hrl
-
-$(EBIN)/et_wx_contents_viewer.$(EMULATOR): et_wx_contents_viewer.erl ../include/et.hrl et_internal.hrl
-
-$(EBIN)/et_collector.$(EMULATOR): et_collector.erl ../include/et.hrl et_internal.hrl
-
-$(EBIN)/et_viewer.$(EMULATOR): et_viewer.erl ../include/et.hrl et_internal.hrl
-
-$(EBIN)/et_wx_viewer.$(EMULATOR): et_wx_viewer.erl ../include/et.hrl et_internal.hrl
-
-
-
+include $(ERL_TOP)/make/dep.mk

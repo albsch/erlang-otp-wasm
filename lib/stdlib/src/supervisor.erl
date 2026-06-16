@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -236,12 +236,12 @@ but the map is preferred.
 
 - `shutdown` defines how a child process must be terminated. `brutal_kill` means
   that the child process is unconditionally terminated using
-  [`exit(Child,kill)`](`exit/2`). An integer time-out value means that the
+  [`exit_signal(Child,kill)`](`exit_signal/2`). An integer time-out value means that the
   supervisor tells the child process to terminate by calling
-  [`exit(Child,shutdown)`](`exit/2`) and then wait for an exit signal with
+  [`exit_signal(Child,shutdown)`](`exit_signal/2`) and then wait for an exit signal with
   reason `shutdown` back from the child process. If no exit signal is received
   within the specified number of milliseconds, the child process is
-  unconditionally terminated using [`exit(Child,kill)`](`exit/2`).
+  unconditionally terminated using [`exit_signal(Child,kill)`](`exit_signal/2`).
 
   If the child process is another supervisor, the shutdown time must be set to
   `infinity` to give the subtree ample time to shut down.
@@ -287,12 +287,10 @@ but the map is preferred.
 - Internally, the supervisor also keeps track of the pid `Child` of the child
   process, or `undefined` if no pid exists.
 
-## See Also
+### See Also
 
 `m:gen_event`, `m:gen_statem`, `m:gen_server`, `m:sys`
 """.
-
--compile(nowarn_deprecated_catch).
 
 -behaviour(gen_server).
 
@@ -302,7 +300,8 @@ but the map is preferred.
 	 delete_child/2, terminate_child/2,
 	 which_children/1, which_child/2,
 	 count_children/1, check_childspecs/1,
-	 check_childspecs/2, get_childspec/2]).
+	 check_childspecs/2, get_childspec/2,
+	 stop/1, stop/3]).
 
 %% Internal exports
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
@@ -465,7 +464,7 @@ see more details [above](`m:supervisor#sup_flags`).
 		modules = []    :: modules()}).
 -type child_rec() :: #child{}.
 
--record(state, {name,
+-record(state, {name                   :: sup_name() | {pid(), module()},
 		strategy = one_for_one :: strategy(),
 		children = {[],#{}}    :: children(), % Ids in start order
                 dynamics               :: {'maps', #{pid() => list()}}
@@ -478,6 +477,7 @@ see more details [above](`m:supervisor#sup_flags`).
 		dynamic_restarts = 0   :: non_neg_integer(),
 		auto_shutdown = never  :: auto_shutdown(),
 		hibernate_after = infinity :: timeout(),
+		hibernating = false    :: boolean(),
 		tag = make_ref()       :: reference(),
 	        module,
 	        args}).
@@ -829,6 +829,45 @@ processes:
 count_children(Supervisor) ->
     call(Supervisor, count_children).
 
+-doc(#{equiv => stop(SupRef, normal, infinity)}).
+-doc(#{since => <<"OTP 29.0">>}).
+-spec stop(SupRef :: sup_ref()) -> ok.
+stop(Supervisor) ->
+    gen_server:stop(Supervisor).
+
+-doc """
+Stop a supervisor.
+
+Orders the supervisor specified by `SupRef` to exit
+with the specified `Reason` and waits for it to terminate.
+The supervisor will terminate all its children
+before exiting.
+
+The function returns `ok` if the supervisor terminates
+with the expected reason. Any other reason than `normal`, `shutdown`,
+or `{shutdown,Term}` causes an error report to be issued using `m:logger`.
+An exit signal with the same reason is sent to linked processes and ports.
+
+`Timeout` is an integer that specifies how many milliseconds to wait
+for the supervisor to terminate, or the atom `infinity` to wait indefinitely.
+If the supervisor has not terminated within the specified time,
+the call exits the calling process with reason `timeout`.
+
+If the process does not exist, the call exits the calling process
+with reason `noproc`, or with reason `{nodedown,Node}`
+if the connection fails to the remote `Node` where the supervisor runs.
+
+> #### Warning {: .warning }
+>
+> Calling this function from a (sub-)child process of the given supervisor
+> will result in a deadlock which will last until either the shutdown timeout
+> of the child or the timeout given to `stop/3` has expired.
+""".
+-doc(#{since => <<"OTP 29.0">>}).
+-spec stop(SupRef :: sup_ref(), Reason :: term(), Timeout :: timeout()) -> ok.
+stop(Supervisor, Reason, Timeout) ->
+    gen_server:stop(Supervisor, Reason, Timeout).
+
 call(Supervisor, Req) ->
     gen_server:call(Supervisor, Req, infinity).
 
@@ -993,18 +1032,30 @@ do_start_child(SupName, Child, Report) ->
     end.
 
 do_start_child_i(M, F, A) ->
-    case catch apply(M, F, A) of
-	{ok, Pid} when is_pid(Pid) ->
-	    {ok, Pid};
-	{ok, Pid, Extra} when is_pid(Pid) ->
-	    {ok, Pid, Extra};
-	ignore ->
-	    {ok, undefined};
-	{error, Error} ->
-	    {error, Error};
-	What ->
-	    {error, What}
+    try
+        apply(M, F, A)
+    of
+        Result ->
+            handle_do_start_child_i_result(Result)
+    catch
+        throw:Result ->
+            handle_do_start_child_i_result(Result);
+        exit:Reason ->
+            {error, {'EXIT', Reason}};
+        error:Reason:StackTrace ->
+            {error, {'EXIT', {Reason, StackTrace}}}
     end.
+
+handle_do_start_child_i_result({ok, Pid} = Result) when is_pid(Pid) ->
+    Result;
+handle_do_start_child_i_result({ok, Pid, _Extra} = Result) when is_pid(Pid) ->
+    Result;
+handle_do_start_child_i_result(ignore) ->
+    {ok, undefined};
+handle_do_start_child_i_result({error, _Reason} = Error) ->
+    Error;
+handle_do_start_child_i_result(Other) ->
+    {error, Other}.
 
 %%% ---------------------------------------------------
 %%% 
@@ -1014,6 +1065,9 @@ do_start_child_i(M, F, A) ->
 -type call() :: 'which_children' | 'count_children' | {_, _}.	% XXX: refine
 -doc false.
 -spec handle_call(call(), term(), state()) -> {'reply', term(), state(), gen_server:action()}.
+
+handle_call(Msg, From, #state{hibernating = true} = State) ->
+    handle_call(Msg, From, wakeup(State));
 
 handle_call({start_child, EArgs}, _From, State) when ?is_simple(State) ->
     Child = get_dynamic_child(State),
@@ -1201,6 +1255,9 @@ count_child(#child{pid = Pid, child_type = supervisor},
 -spec handle_cast({try_again_restart, reference(), child_id() | {'restarting',pid()}}, state()) ->
 			 {'noreply', state(), gen_server:action()} | {stop, shutdown, state()}.
 
+handle_cast(Msg, #state{hibernating = true} = State) ->
+    handle_cast(Msg, wakeup(State));
+
 handle_cast({try_again_restart, Tag, TryAgainId}, #state{tag = Tag} = State) ->
     case find_child_and_args(TryAgainId, State) of
 	{ok, Child = #child{pid=?restarting(_)}} ->
@@ -1222,7 +1279,10 @@ handle_cast({try_again_restart, Tag, TryAgainId}, #state{tag = Tag} = State) ->
         {'noreply', state(), gen_server:action()} | {'stop', 'shutdown', state()}.
 
 handle_info({hibernate, Tag}, #state{tag = Tag} = State) ->
-    {noreply, State, hibernate};
+    {noreply, enter_hibernation(State), hibernate};
+
+handle_info(Msg, #state{hibernating = true} = State) ->
+    handle_info(Msg, wakeup(State));
 
 handle_info({'EXIT', Pid, Reason}, State) ->
     case restart_child(Pid, Reason, State) of
@@ -1242,7 +1302,7 @@ handle_info(Msg, State) ->
 %% Terminate this server.
 %%
 -doc false.
--spec terminate(term(), state()) -> 'ok'.
+-spec terminate(term(), state()) -> term().
 
 terminate(_Reason, State) when ?is_simple(State) ->
     terminate_dynamic_children(State);
@@ -1278,6 +1338,14 @@ code_change(_, State, _) ->
 	Error ->
 	    Error
     end.
+
+enter_hibernation(State0) ->
+    State1 = purge_restarts(State0),
+    State1#state{hibernating = true}.
+
+wakeup(State0) ->
+    State1 = purge_restarts(State0),
+    State1#state{hibernating = false}.
 
 update_childspec(State, StartSpec) when ?is_simple(State) ->
     case check_startspec(StartSpec, State#state.auto_shutdown) of
@@ -1500,13 +1568,9 @@ restarting(RPid) -> RPid.
 try_again_restart(TryAgainId, Tag) ->
     gen_server:cast(self(), {try_again_restart, Tag, TryAgainId}).
 
-%%-----------------------------------------------------------------
-%% Func: terminate_children/2
-%% Args: Children = children() % Ids in termination order
-%%       SupName = {local, atom()} | {global, term()} | {pid(),Mod}
-%% Returns: NChildren = children() % Ids in startup order
-%%                                 % (reversed termination order)
-%%-----------------------------------------------------------------
+%% Children  :: children() % Ids in termination order
+%% NChildren :: children() % Ids in startup order, i.e. reversed termination order
+-spec terminate_children(children(), sup_name() | {pid(), module()}) -> children().
 terminate_children(Children, SupName) ->
     Terminate =
         fun(_Id,Child) when ?is_temporary(Child) ->
@@ -1964,7 +2028,7 @@ set_flags(Flags, State) ->
 			     auto_shutdown = AutoShutdown,
 			     hibernate_after = HibernateAfter}}
     catch
-	Thrown -> Thrown
+        throw:Thrown -> Thrown
     end.
 
 check_flags(SupFlags) when is_map(SupFlags) ->
@@ -2036,6 +2100,10 @@ default_hibernate_after(simple_one_for_one) ->
 default_hibernate_after(_) ->
     1000.
 
+-spec supname('self', Mod) -> {pid(), Mod} when
+      Mod :: module();
+             (Name, module()) -> Name when
+      Name :: sup_name().
 supname(self, Mod) -> {self(), Mod};
 supname(N, _)      -> N.
 
@@ -2056,7 +2124,7 @@ check_startspec([ChildSpec|T], Ids, Db, AutoShutdown) ->
 		%% The error message duplicate_child_name is kept for
 		%% backwards compatibility, although
 		%% duplicate_child_id would be more correct.
-		true -> {duplicate_child_name, Id};
+                true -> {duplicate_child_name, Id};
 		false -> check_startspec(T, [Id | Ids], Db#{Id=>Child},
 					 AutoShutdown)
 	    end;
@@ -2066,8 +2134,13 @@ check_startspec([], Ids, Db, _AutoShutdown) ->
     {ok, {lists:reverse(Ids),Db}}.
 
 check_childspec(ChildSpec, AutoShutdown) when is_map(ChildSpec) ->
-    catch do_check_childspec(maps:merge(?default_child_spec,ChildSpec),
-			     AutoShutdown);
+    try
+        do_check_childspec(maps:merge(?default_child_spec,ChildSpec),
+                           AutoShutdown)
+    catch
+        throw:Error ->
+            Error
+    end;
 check_childspec({Id, Func, RestartType, Shutdown, ChildType, Mods},
 		AutoShutdown) ->
     check_childspec(#{id => Id,
@@ -2091,26 +2164,26 @@ do_check_childspec(#{restart := RestartType,
 	       #{start := F} -> F;
 	       _ -> throw(missing_start)
 	   end,
-    validId(Id),
-    validFunc(Func),
-    validRestartType(RestartType),
+    true = validId(Id),
+    true = validFunc(Func),
+    true = validRestartType(RestartType),
     Significant = case ChildSpec of
 		      #{significant := Signf} -> Signf;
 		      _ -> false
                   end,
-    validSignificant(Significant, RestartType, AutoShutdown),
-    validChildType(ChildType),
+    true = validSignificant(Significant, RestartType, AutoShutdown),
+    true = validChildType(ChildType),
     Shutdown = case ChildSpec of
 		   #{shutdown := S} -> S;
 		   #{type := worker} -> 5000;
 		   #{type := supervisor} -> infinity
 	       end,
-    validShutdown(Shutdown),
+    true = validShutdown(Shutdown),
     Mods = case ChildSpec of
 	       #{modules := Ms} -> Ms;
 	       _ -> {M,_,_} = Func, [M]
 	   end,
-    validMods(Mods),
+    true = validMods(Mods),
     {ok, #child{id = Id, mfargs = Func, restart_type = RestartType,
 		significant = Significant, shutdown = Shutdown,
 		child_type = ChildType, modules = Mods}}.
@@ -2149,13 +2222,13 @@ validShutdown(Shutdown)             -> throw({invalid_shutdown, Shutdown}).
 
 validMods(dynamic) -> true;
 validMods(Mods) when is_list(Mods) ->
-    lists:foreach(fun(Mod) ->
-		    if
-			is_atom(Mod) -> ok;
-			true -> throw({invalid_module, Mod})
-		    end
-		  end,
-		  Mods);
+    lists:all(fun
+                  (Mod) when is_atom(Mod) ->
+                      true;
+                  (Mod) ->
+                      throw({invalid_module, Mod})
+              end,
+              Mods);
 validMods(Mods) -> throw({invalid_modules, Mods}).
 
 child_to_spec(#child{id = Id,
@@ -2184,23 +2257,23 @@ child_to_spec(#child{id = Id,
 
 %% shortcut: if the intensity limit is 0, no restarts are allowed;
 %% it is safe to disallow the restart flat out
-add_restart(State=#state{intensity=0}) -> 
+add_restart(#state{intensity = 0} = State) -> 
     {terminate, State};
 %% shortcut: if the number of restarts is below the intensity
 %% limit, it is safe to allow the restart, add the restart to
 %% the list and not care about expired restarts; to prevent
 %% accumulating a large list of expired restarts over time,
 %% this shortcut is limited to ?DIRTY_RESTART_LIMIT restarts
-add_restart(State=#state{intensity=I, restarts=R, nrestarts=NR})
+add_restart(#state{intensity = I, restarts = R, nrestarts = NR} = State)
   when NR < min(I, ?DIRTY_RESTART_LIMIT) ->
-    {ok, State#state{restarts=[erlang:monotonic_time(second)|R], nrestarts=NR + 1}};
+    {ok, State#state{restarts = [erlang:monotonic_time(second)|R], nrestarts = NR + 1}};
 %% calculate the real number of restarts within the period
 %% and remove expired restarts; based on the calculated number
 %% of restarts, allow or disallow the restart
-add_restart(State=#state{intensity=I, period=P, restarts=R}) ->  
+add_restart(#state{intensity = I, period = P, restarts = R} = State) ->  
     Now = erlang:monotonic_time(second),
-    Treshold = Now - P,
-    case can_restart(I - 1, Treshold, R, [], 0) of
+    Threshold = Now - P,
+    case can_restart(I - 1, Threshold, R, [], 0) of
         {true, NR1, R1} ->
             {ok, State#state{restarts = [Now|R1], nrestarts = NR1 + 1}};
         {false, NR1, R1} ->
@@ -2209,12 +2282,22 @@ add_restart(State=#state{intensity=I, period=P, restarts=R}) ->
 
 can_restart(_, _, [], Acc, NR) ->
     {true, NR, lists:reverse(Acc)};
-can_restart(_, Treshold, [Restart|_], Acc, NR) when Restart < Treshold ->
+can_restart(_, Threshold, [Restart|_], Acc, NR) when Restart < Threshold ->
     {true, NR, lists:reverse(Acc)};
 can_restart(0, _, [_|_], Acc, NR) ->
     {false, NR, lists:reverse(Acc)};
-can_restart(N, Treshold, [Restart|Restarts], Acc, NR) ->
-    can_restart(N - 1, Treshold, Restarts, [Restart|Acc], NR + 1).
+can_restart(N, Threshold, [Restart|Restarts], Acc, NR) ->
+    can_restart(N - 1, Threshold, Restarts, [Restart|Acc], NR + 1).
+
+purge_restarts(#state{period = P, restarts = [R|_]} = State) ->
+    case erlang:monotonic_time(second) - P of
+	Threshold when R < Threshold ->
+	    State#state{restarts = [], nrestarts = 0};
+	_ ->
+	    State
+    end;
+purge_restarts(State) ->
+    State.
 
 %%% ------------------------------------------------------
 %%% Error and progress reporting.

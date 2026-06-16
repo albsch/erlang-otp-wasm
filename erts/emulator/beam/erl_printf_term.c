@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2005-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2005-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,6 +29,7 @@
 #include "big.h"
 #include "erl_map.h"
 #include "erl_binary.h"
+#include "erl_record.h"
 
 #define PRINT_CHAR(CNT, FN, ARG, C)					\
 do {									\
@@ -333,7 +334,8 @@ static int print_atom_name(fmtfn_t fn, void* arg, Eterm atom, long *dcount)
 #define PRT_TERM               ((Eterm) 5)
 #define PRT_ONE_CONS           ((Eterm) 6)
 #define PRT_PATCH_FUN_SIZE     ((Eterm) 7)
-#define PRT_LAST_ARRAY_ELEMENT ((Eterm) 8) /* Note! Must be last... */
+#define PRT_EQUALS             ((Eterm) 8)
+#define PRT_LAST_ARRAY_ELEMENT ((Eterm) 9) /* Note! Must be last... */
 
 #if 0
 static char *format_binary(Uint16 x, char *b) {
@@ -381,6 +383,9 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	    goto L_outer_loop;
 	case PRT_ASSOC:
 	    PRINT_STRING(res, fn, arg, "=>");
+	    goto L_outer_loop;
+	case PRT_EQUALS:
+	    PRINT_STRING(res, fn, arg, "=");
 	    goto L_outer_loop;
 	default:
 	    popped.word = WSTACK_POP(s);
@@ -447,7 +452,11 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
                 PRINT_CHAR(res, fn, arg, '>');
             }
 	    goto L_done;
-	}
+	} else if (is_catch(obj) && catch_val(obj) == 0) {
+            /* Missing default value in a native record definition. */
+            PRINT_STRING(res, fn, arg, "<novalue>");
+	    goto L_outer_loop;
+        }
 	wobj = (Eterm)obj;
 	switch (tag_val_def(wobj)) {
 	case NIL_DEF:
@@ -484,7 +493,7 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 	case REF_DEF:
             if (!ERTS_IS_CRASH_DUMPING)
                 erts_magic_ref_save_bin(obj);
-            /* fall through... */
+            ERTS_FALLTHROUGH();
 	case EXTERNAL_REF_DEF:
 	    PRINT_STRING(res, fn, arg, "#Ref<");
 	    PRINT_UWORD(res, fn, arg, 'u', 0, 1,
@@ -546,16 +555,44 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
 		goto L_print_one_cons;
 	    }
 	    break;
-	case TUPLE_DEF:
-	    nobj = tuple_val(wobj);	/* pointer to arity */
-	    i = arityval(*nobj);	/* arity */
-	    PRINT_CHAR(res, fn, arg, '{');
-	    WSTACK_PUSH(s,PRT_CLOSE_TUPLE);
-	    ++nobj;
-	    if (i > 0) {
-		WSTACK_PUSH2(s, (UWord) nobj, PRT_LAST_ARRAY_ELEMENT+i-1);
-	    }
-	    break;
+        case RECORD_DEF:
+            {
+                ErtsRecordInstance *instance;
+                ErtsRecordDefinition *defp;
+                Eterm *ks, *vs;
+                int n;
+
+                instance = RECORD_INST_P(wobj);
+                n = RECORD_INST_FIELD_COUNT(instance);
+                defp = RECORD_DEF_P(instance);
+                ks = defp->keys;
+                vs = instance->values;
+                PRINT_CHAR(res, fn, arg, '#');
+                PRINT_ATOM(res, fn, arg, defp->module, dcount);
+                PRINT_CHAR(res, fn, arg, ':');
+                PRINT_ATOM(res, fn, arg, defp->name, dcount);
+                PRINT_CHAR(res, fn, arg, '{');
+                WSTACK_PUSH(s, PRT_CLOSE_TUPLE);
+                if (n > 0) {
+                    n--;
+                    WSTACK_PUSH5(s, vs[n], PRT_TERM, PRT_EQUALS, ks[n], PRT_TERM);
+                    while (n--) {
+                        WSTACK_PUSH6(s, PRT_COMMA, vs[n], PRT_TERM, PRT_EQUALS,
+                                ks[n], PRT_TERM);
+                    }
+                }
+            }
+            break;
+        case TUPLE_DEF:
+            nobj = tuple_val(wobj);     /* pointer to arity */
+            i = arityval(*nobj);        /* arity */
+            PRINT_CHAR(res, fn, arg, '{');
+            WSTACK_PUSH(s,PRT_CLOSE_TUPLE);
+            ++nobj;
+            if (i > 0) {
+                WSTACK_PUSH2(s, (UWord) nobj, PRT_LAST_ARRAY_ELEMENT+i-1);
+            }
+            break;
 	case FLOAT_DEF: {
 	    FloatDef ff;
 	    GET_DOUBLE(wobj, ff);
@@ -720,7 +757,7 @@ print_term(fmtfn_t fn, void* arg, Eterm obj, long *dcount) {
                     PRINT_STRING(res, fn, arg, "#{");
                     WSTACK_PUSH(s, PRT_CLOSE_TUPLE);
                     head++;
-                    /* fall through */
+                    ERTS_FALLTHROUGH();
                 case MAP_HEADER_TAG_HAMT_NODE_BITMAP:
                     n = hashmap_bitcount(mapval);
                     ASSERT(0 < n && n < 17);

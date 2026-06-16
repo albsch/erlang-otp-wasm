@@ -21,6 +21,35 @@ limitations under the License.
 -->
 # SNMP Release Notes
 
+## SNMP 5.20.4
+
+### Fixed Bugs and Malfunctions
+
+- Fixed a bug in snmpm_usm:generate_outgoing_msg/5 that caused a badmatch crash when constructing an error response for an unknown user/engineID combination.
+
+  Own Id: OTP-20138 Aux Id: ERIERL-1321, [PR-11100]
+
+[PR-11100]: https://github.com/erlang/otp/pull/11100
+
+## SNMP 5.20.3
+
+### Improvements and New Features
+
+- The legacy `and` and `or` operators have been replaced with other language constructs.
+
+  Own Id: OTP-19744 Aux Id: [PR-10114], [PR-10554], [PR-10568], [PR-10579], [PR-10585], [PR-10598], [PR-10710], [PR-10718], [PR-10580], [PR-10730]
+
+[PR-10114]: https://github.com/erlang/otp/pull/10114
+[PR-10554]: https://github.com/erlang/otp/pull/10554
+[PR-10568]: https://github.com/erlang/otp/pull/10568
+[PR-10579]: https://github.com/erlang/otp/pull/10579
+[PR-10585]: https://github.com/erlang/otp/pull/10585
+[PR-10598]: https://github.com/erlang/otp/pull/10598
+[PR-10710]: https://github.com/erlang/otp/pull/10710
+[PR-10718]: https://github.com/erlang/otp/pull/10718
+[PR-10580]: https://github.com/erlang/otp/pull/10580
+[PR-10730]: https://github.com/erlang/otp/pull/10730
+
 ## SNMP 5.20.2
 
 ### Improvements and New Features

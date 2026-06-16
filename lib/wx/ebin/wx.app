@@ -22,7 +22,7 @@
 
 {application, wx,
  [{description, "Yet another graphics system"},
-  {vsn, "2.5.4"},
+  {vsn, "2.6"},
   {modules,
    [
     %% Generated modules

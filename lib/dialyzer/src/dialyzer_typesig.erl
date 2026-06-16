@@ -5,7 +5,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 %%
 %% Copyright 2004-2010 held by the authors. All Rights Reserved.
-%% Copyright Ericsson AB 2009-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,6 +31,8 @@
 
 -module(dialyzer_typesig).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([analyze_scc/7]).
 -export([get_safe_underapprox/2]).
@@ -58,7 +60,7 @@
 	 t_list_elements/1, t_nonempty_list/1, t_maybe_improper_list/0,
 	 t_module/0, t_number/0, t_number_vals/1,
 	 t_pid/0, t_port/0, t_product/1, t_reference/0,
-	 t_subst/2,
+	 t_record/0, t_subst/2,
 	 t_timeout/0, t_tuple/0, t_tuple/1,
          t_var/1, t_var_name/1,
 	 t_none/0, t_unit/0,
@@ -451,6 +453,12 @@ traverse(Tree, DefinedVars, State) ->
           {State, t_any()};
         executable_line ->
           {State, t_any()};
+        record_field ->
+          {State, t_any()};
+        is_native_record ->
+          {State, t_any()};
+        is_record_accessible ->
+          {State, t_any()};
 	Other -> erlang:error({'Unsupported primop', Other})
       end;
     seq ->
@@ -607,6 +615,11 @@ traverse(Tree, DefinedVars, State) ->
 	    state__store_conj(ArgVar, sub, ArgType, State3)
 	end,
       {state__store_conj(MapVar, sub, MapType, State4), MapVar};
+    record ->
+      Es = cerl:record_es(Tree),
+      Vals = [cerl:record_pair_val(P) || P <- Es],
+      {State1, _ValVars} = traverse_list(Vals, DefinedVars, State),
+      {State1, mk_var(Tree)};
     values ->
       %% We can get into trouble when unifying products that have the
       %% same element appearing several times. Handle these cases by
@@ -1042,8 +1055,6 @@ get_type_test({erlang, is_map, 1}) ->       {ok, t_map()};
 get_type_test({erlang, is_number, 1}) ->    {ok, t_number()};
 get_type_test({erlang, is_pid, 1}) ->       {ok, t_pid()};
 get_type_test({erlang, is_port, 1}) ->      {ok, t_port()};
-%% get_type_test({erlang, is_record, 2}) ->    {ok, t_tuple()};
-%% get_type_test({erlang, is_record, 3}) ->    {ok, t_tuple()};
 get_type_test({erlang, is_reference, 1}) -> {ok, t_reference()};
 get_type_test({erlang, is_tuple, 1}) ->     {ok, t_tuple()};
 get_type_test({M, F, A}) when is_atom(M), is_atom(F), is_integer(A) -> error.
@@ -1137,6 +1148,8 @@ get_safe_underapprox_1([Pat0|Left], Acc, Map) ->
 	OtherPat ->
 	  get_safe_underapprox_1([OtherPat|Left], Acc, Map)
       end;
+    record ->
+      throw(dont_know);
     tuple ->
       Es = cerl:tuple_es(Pat),
       {Ts, Map1} = get_safe_underapprox_1(Es, [], Map),
@@ -1146,7 +1159,8 @@ get_safe_underapprox_1([Pat0|Left], Acc, Map) ->
       %% Some assertions in case the syntax gets more premissive in the future
       true = #{} =:= cerl:concrete(cerl:map_arg(Pat)),
       true = lists:all(fun(P) ->
-			   cerl:is_literal(Op = cerl:map_pair_op(P)) andalso
+                           Op = cerl:map_pair_op(P),
+			   cerl:is_literal(Op) andalso
 			     exact =:= cerl:concrete(Op)
 		       end, cerl:map_es(Pat)),
       KeyTrees = lists:map(fun cerl:map_pair_key/1, cerl:map_es(Pat)),
@@ -1162,7 +1176,8 @@ get_safe_underapprox_1([Pat0|Left], Acc, Map) ->
       %% We need to deal with duplicates ourselves
       SquashDuplicates =
 	fun SquashDuplicates([{K,First},{K,Second}|List]) ->
-	    case t_is_none(Inf = t_inf(First, Second)) of
+            Inf = t_inf(First, Second),
+	    case t_is_none(Inf) of
 	      true -> throw(dont_know);
 	      false -> [{K, Inf}|SquashDuplicates(List)]
 	    end;
@@ -1190,7 +1205,8 @@ get_safe_overapprox(Pats) ->
   lists:map(fun get_safe_overapprox_1/1, Pats).
 
 get_safe_overapprox_1(Pat) ->
-  case cerl:is_literal(Lit = cerl:fold_literal(Pat)) of
+  Lit = cerl:fold_literal(Pat),
+  case cerl:is_literal(Lit) of
     true  -> t_from_term(cerl:concrete(Lit));
     false -> t_any()
   end.
@@ -1407,8 +1423,8 @@ get_bif_constr({erlang, is_reference, 1}, Dst, [Arg], State) ->
 get_bif_constr({erlang, is_record, 2}, Dst, [Var, Tag] = Args, _State) ->
   ArgFun = fun(Map) ->
 	       case t_is_any_atom(true, lookup_type(Dst, Map)) of
-		 true -> t_tuple();
-		 false -> t_any()
+                 true -> t_sup(t_tuple(), t_record());
+                 false -> t_any()
 	       end
 	   end,
   ArgV = ?mk_fun_var(ArgFun, [Dst]),
@@ -1421,7 +1437,6 @@ get_bif_constr({erlang, is_record, 2}, Dst, [Var, Tag] = Args, _State) ->
 			   mk_constraint(Tag, sub, t_atom()),
 			   mk_constraint(Var, sub, ArgV)]);
 get_bif_constr({erlang, is_record, 3}, Dst, [Var, Tag, Arity] = Args, State) ->
-  %% TODO: Revise this to make it precise for Tag and Arity.
   ArgFun =
     fun(Map) ->
 	case t_is_any_atom(true, lookup_type(Dst, Map)) of
@@ -1449,7 +1464,7 @@ get_bif_constr({erlang, is_record, 3}, Dst, [Var, Tag, Arity] = Args, State) ->
 		    end;
 		  _ -> t_tuple()
 		end;
-	      false -> t_tuple()
+	      false -> t_sup(t_tuple(), t_record())
 	    end;
 	  false -> t_any()
 	end
@@ -1461,10 +1476,20 @@ get_bif_constr({erlang, is_record, 3}, Dst, [Var, Tag, Arity] = Args, State) ->
 	       bif_return(erlang, is_record, 3, TmpArgTypes)
 	   end,
   DstV = ?mk_fun_var(DstFun, Args),
-  mk_conj_constraint_list([mk_constraint(Dst, sub, DstV),
-			   mk_constraint(Arity, sub, t_integer()),
-			   mk_constraint(Tag, sub, t_atom()),
-			   mk_constraint(Var, sub, ArgV)]);
+  case {t_is_atom(Arity),t_is_integer(Arity)} of
+    {false, true} ->
+      %% Tuple record
+      mk_conj_constraint_list([mk_constraint(Dst, sub, DstV),
+                               mk_constraint(Arity, sub, t_integer()),
+                               mk_constraint(Tag, sub, t_atom()),
+                               mk_constraint(Var, sub, ArgV)]);
+    {true, false} ->
+      %% Native record
+      mk_conj_constraint_list([mk_constraint(Var, sub, t_record()),
+                               mk_constraint(Tag, sub, t_atom())]);
+    {_, _} ->
+      mk_constraint_any(sub)
+  end;
 get_bif_constr({erlang, is_tuple, 1}, Dst, [Arg], State) ->
   get_bif_test_constr(Dst, Arg, t_tuple(), State);
 get_bif_constr({erlang, 'and', 2}, Dst, [Arg1, Arg2] = Args, _State) ->
@@ -3102,9 +3127,8 @@ lookup_record(State, Tag, Arity) ->
     end,
   case erl_types:lookup_record(Tag, Arity, Rec) of
     {ok, Fields} ->
-      RecType =
-        t_tuple([t_from_term(Tag)|
-                 [FieldType || {_FieldName, _Abstr, FieldType} <- Fields]]),
+      RecType = t_tuple([t_from_term(Tag)|
+                            [FieldType || {_FieldName, _Abstr, FieldType} <- Fields]]),
       {ok, RecType, State1};
     error ->
       {error, State1}

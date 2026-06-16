@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -400,7 +400,9 @@ Eterm error_atom[NUMBER_EXIT_CODES] = {
   am_notsup,		/* 17 */
   am_badmap,		/* 18 */
   am_badkey,		/* 19 */
-  am_badrecord,		/* 20 */
+  am_badrecord,         /* 20 */
+  am_badfield,          /* 21 */
+  am_novalue,           /* 22 */
 };
 
 /* Returns the return address at E[0] in printable form, skipping tracing in
@@ -757,6 +759,8 @@ expand_error_value(Process* c_p, Uint freason, Eterm Value) {
     case (GET_EXC_INDEX(EXC_BADMAP)):
     case (GET_EXC_INDEX(EXC_BADKEY)):
     case (GET_EXC_INDEX(EXC_BADRECORD)):
+    case (GET_EXC_INDEX(EXC_BADFIELD)):
+    case (GET_EXC_INDEX(EXC_NOVALUE)):
         /* Some common exceptions: value -> {atom, value} */
         ASSERT(is_value(Value));
 	hp = HAlloc(c_p, 3);
@@ -1632,7 +1636,7 @@ call_fun(Process* p,    /* Current process. */
         if (is_local_fun(funp)) {
             DTRACE_LOCAL_CALL(p, erts_code_to_codemfa(code_ptr));
         } else {
-            Export *ep = funp->entry.exp;
+            const Export *ep = funp->entry.exp;
             DTRACE_GLOBAL_CALL(p, &ep->info.mfa);
         }
 #endif

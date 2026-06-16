@@ -22,6 +22,7 @@
 -module(unicode_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 -export([all/0, suite/0,groups/0,
 	 utf8_illegal_sequences_bif/1,
@@ -39,14 +40,17 @@
          normalize/1,
          huge_illegal_code_points/1,
          bin_is_7bit/1,
-         error_info/1
+         error_info/1,
+         is_whitespace/1,
+         category/1,
+         is_id/1
         ]).
 
 suite() ->
     [{ct_hooks,[ts_install_cth]},
      {timetrap,{minutes,20}}].
 
-all() -> 
+all() ->
     [utf8_illegal_sequences_bif,
      utf16_illegal_sequences_bif, random_lists, roundtrips,
      latin1, exceptions,
@@ -55,6 +59,7 @@ all() ->
      {group,binaries_errors},
      huge_illegal_code_points,
      bin_is_7bit,
+     {group, classify},
      error_info].
 
 groups() -> 
@@ -63,7 +68,12 @@ groups() ->
        ex_binaries_errors_utf16_little,
        ex_binaries_errors_utf16_big,
        ex_binaries_errors_utf32_little,
-       ex_binaries_errors_utf32_big]}].
+       ex_binaries_errors_utf32_big]},
+     {classify, [parallel],
+      [is_whitespace,
+       category,
+       is_id]}
+    ].
 
 binaries_errors_limit(Config) when is_list(Config) ->
     setlimit(10),
@@ -190,73 +200,73 @@ exceptions(Config) when is_list(Config) ->
 
 ex_exceptions(Config) when is_list(Config) ->
     L = lists:seq(0,255),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L++255,unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary({1,2,3},unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1,unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1.0,unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary('1',unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,apa],unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,4.0],unicode)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L++255,latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary({1,2,3},latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1,latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1.0,latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary('1',latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,apa],latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,4.0],latin1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,gnarfl)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,L)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,{latin1})),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,[latin1])),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,1.0)),
+    ?assertError(badarg, unicode:characters_to_binary(L++255,unicode)),
+    ?assertError(badarg, unicode:characters_to_binary({1,2,3},unicode)),
+    ?assertError(badarg, unicode:characters_to_binary(1,unicode)),
+    ?assertError(badarg, unicode:characters_to_binary(1.0,unicode)),
+    ?assertError(badarg, unicode:characters_to_binary('1',unicode)),
+    ?assertError(badarg, unicode:characters_to_binary([1,2,3,apa],unicode)),
+    ?assertError(badarg, unicode:characters_to_binary([1,2,3,4.0],unicode)),
+    ?assertError(badarg, unicode:characters_to_binary(L++255,latin1)),
+    ?assertError(badarg, unicode:characters_to_binary({1,2,3},latin1)),
+    ?assertError(badarg, unicode:characters_to_binary(1,latin1)),
+    ?assertError(badarg, unicode:characters_to_binary(1.0,latin1)),
+    ?assertError(badarg, unicode:characters_to_binary('1',latin1)),
+    ?assertError(badarg, unicode:characters_to_binary([1,2,3,apa],latin1)),
+    ?assertError(badarg, unicode:characters_to_binary([1,2,3,4.0],latin1)),
+    ?assertError(badarg, unicode:characters_to_binary(L,gnarfl)),
+    ?assertError(badarg, unicode:characters_to_binary(L,L)),
+    ?assertError(badarg, unicode:characters_to_binary(L,{latin1})),
+    ?assertError(badarg, unicode:characters_to_binary(L,[latin1])),
+    ?assertError(badarg, unicode:characters_to_binary(L,1)),
+    ?assertError(badarg, unicode:characters_to_binary(L,1.0)),
     Encodings = [unicode, utf8,utf16,utf32,{utf16,big},
 		 {utf16,little},{utf32,big},{utf32,little}],
     [ begin
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L++255,unicode,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary({1,2,3},unicode,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1,unicode,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1.0,unicode,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary('1',unicode,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,apa],unicode,
-								    Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,4.0],unicode,
-								    Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L++255,latin1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary({1,2,3},latin1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1,latin1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(1.0,latin1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary('1',latin1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,apa],latin1,
-								    Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary([1,2,3,4.0],latin1,
-								    Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,gnarfl,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,L,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,{latin1},Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,[latin1],Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_binary(L,1.0,Enc))
+          ?assertError(badarg, unicode:characters_to_binary(L++255,unicode,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary({1,2,3},unicode,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(1,unicode,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(1.0,unicode,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary('1',unicode,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary([1,2,3,apa],unicode,
+                                                                    Enc)),
+          ?assertError(badarg, unicode:characters_to_binary([1,2,3,4.0],unicode,
+                                                                    Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L++255,latin1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary({1,2,3},latin1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(1,latin1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(1.0,latin1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary('1',latin1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary([1,2,3,apa],latin1,
+                                                                    Enc)),
+          ?assertError(badarg, unicode:characters_to_binary([1,2,3,4.0],latin1,
+                                                                    Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,gnarfl,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,L,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,{latin1},Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,[latin1],Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,1,Enc)),
+          ?assertError(badarg, unicode:characters_to_binary(L,1.0,Enc))
       end || Enc <- Encodings ],
 
 
     Encodings2 = [latin1, unicode, utf8,utf16,utf32,{utf16,big},
 		  {utf16,little},{utf32,big},{utf32,little}],
     [ begin
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L++255,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list({1,2,3},Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(1,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(1.0,Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list('1',Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list([1,2,3,apa],Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list([1,2,3,4.0],Enc)),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,{Enc})),
-	  {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,[Enc]))
+          ?assertError(badarg, unicode:characters_to_list(L++255,Enc)),
+          ?assertError(badarg, unicode:characters_to_list({1,2,3},Enc)),
+          ?assertError(badarg, unicode:characters_to_list(1,Enc)),
+          ?assertError(badarg, unicode:characters_to_list(1.0,Enc)),
+          ?assertError(badarg, unicode:characters_to_list('1',Enc)),
+          ?assertError(badarg, unicode:characters_to_list([1,2,3,apa],Enc)),
+          ?assertError(badarg, unicode:characters_to_list([1,2,3,4.0],Enc)),
+          ?assertError(badarg, unicode:characters_to_list(L,{Enc})),
+          ?assertError(badarg, unicode:characters_to_list(L,[Enc]))
       end || Enc <- Encodings2 ],
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,gnarfl)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,L)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,1)),
-    {'EXIT',{badarg,_}} = (catch unicode:characters_to_list(L,1.0)),
+    ?assertError(badarg, unicode:characters_to_list(L,gnarfl)),
+    ?assertError(badarg, unicode:characters_to_list(L,L)),
+    ?assertError(badarg, unicode:characters_to_list(L,1)),
+    ?assertError(badarg, unicode:characters_to_list(L,1.0)),
     [ begin
 	  Bx = unicode:characters_to_binary(L,latin1, Enc),
 	  L = unicode:characters_to_list(Bx,Enc)
@@ -528,13 +538,13 @@ ex_random_lists(Config) when is_list(Config) ->
 						  flatb(L)))
 	       end,
     SelfMadeA = fun(L) -> 
-			case (catch list_to_utf8_bsyntax(L,latin1)) of
-			    {'EXIT', Reason} ->
-				io:format("Exit: ~p (~w)~n",[Reason,L]),
-				exit(Reason);
-			    Other ->
-				Other
-			end
+                        try
+                            list_to_utf8_bsyntax(L,latin1)
+                        catch
+                            _:Reason ->
+                                io:format("Exit: ~p (~w)~n",[Reason,L]),
+                                exit(Reason)
+                        end
 		end,
     random_iolist:run(150, PlainFlatten1, SelfMade),
     random_iolist:run(150, PlainFlatten2, SelfMadeA),
@@ -934,14 +944,14 @@ fail_bif_1(Bin,Coding) ->
 
 normalize(_) ->
     %% More tests are in unicode_util_SUITE.erl and str_SUITE.erl
-    {'EXIT', _} = (catch unicode:characters_to_nfc_list({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfd_list({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfkc_list({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfkd_list({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfc_binary({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfd_binary({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfkc_binary({tuple})),
-    {'EXIT', _} = (catch unicode:characters_to_nfkd_binary({tuple})),
+    ?assertError(_, unicode:characters_to_nfc_list({tuple})),
+    ?assertError(_, unicode:characters_to_nfd_list({tuple})),
+    ?assertError(_, unicode:characters_to_nfkc_list({tuple})),
+    ?assertError(_, unicode:characters_to_nfkd_list({tuple})),
+    ?assertError(_, unicode:characters_to_nfc_binary({tuple})),
+    ?assertError(_, unicode:characters_to_nfd_binary({tuple})),
+    ?assertError(_, unicode:characters_to_nfkc_binary({tuple})),
+    ?assertError(_, unicode:characters_to_nfkd_binary({tuple})),
     String = ["abc..åäö", <<"Ωµe`è"/utf8>>, "œŒþæÆħ§ß ホンダ"],
     NFD_l = unicode:characters_to_nfd_list(String),
     NFD_b = unicode:characters_to_nfd_binary(String),
@@ -1458,6 +1468,15 @@ error_info(_Config) ->
          {characters_to_nfkd_list, [abc]},
          {characters_to_nfkd_list, [<<1:11>>]},
 
+         {category, [-1]},
+         {category, [foobar]},
+
+         {is_whitespace, [-1]},
+         {is_whitespace, [foobar]},
+
+         {is_id_start, [-1]},
+         {is_id_continue, [foobar]},
+
          %% Not BIFs (they don't throw badarg when they fail).
          {bom_to_encoding, 1},                  %Not BIF.
          {encoding_to_bom, 1},                   %Not BIF.
@@ -1469,13 +1488,139 @@ error_info(_Config) ->
         ],
     error_info_lib:test_error_info(unicode, L).
 
+
+-define(MAX_CHAR, 16#10FFFF).
+category(_Config) ->
+    Check = fun(Id) ->
+                    LC = maps:get(category, unicode_util:lookup(Id)),
+                    LC == unicode:category(Id)
+            end,
+    [] = [Id || Id <- lists:seq(1, ?MAX_CHAR), not Check(Id)],
+    ?assertError(_, unicode:category(-1)),
+    ?assertError(_, unicode:category(5000000)),
+    ?assertError(_, unicode:category(foobar)),
+    ok.
+
+is_whitespace(Config) ->
+    Props = parse_properties(filename:join(proplists:get_value(data_dir, Config), "PropList.txt")),
+    WhiteSpaces = maps:get(white_space, Props),
+    Set = make_set(WhiteSpaces),
+    Test = fun(Char) ->
+                   case {unicode:is_whitespace(Char), sets:is_element(Char, Set)} of
+                       {X,X} -> false;
+                       _ -> true
+                   end
+           end,
+    [] = [{Char, integer_to_list(Char, 16), unicode_util:lookup(Char)}
+          || Char <- lists:seq(1, ?MAX_CHAR), Test(Char)],
+    ok.
+
+is_id(Config) ->
+    Props = parse_properties(filename:join(proplists:get_value(data_dir, Config),
+                                           "DerivedCoreProperties.txt")),
+    [] = id_start(Props),
+    [] = id_cont(Props),
+    ok.
+
+id_start(Props) ->
+    ID_Start = maps:get(id_start, Props),
+    Set = make_set(ID_Start),
+
+    TestStart = fun(Char) ->
+                        case {unicode:is_id_start(Char), sets:is_element(Char, Set)} of
+                            {X,X} -> false;
+                            _ -> true
+                        end
+                end,
+
+    [{Char, integer_to_list(Char, 16), unicode_util:lookup(Char)}
+     || Char <- lists:seq(1, ?MAX_CHAR), TestStart(Char)].
+
+id_cont(Props) ->
+    ID_Cont = maps:get(id_continue, Props),
+    Set = make_set(ID_Cont),
+    TestCont = fun(Char) ->
+                       case {unicode:is_id_continue(Char), sets:is_element(Char, Set)} of
+                           {X,X} -> false;
+                           _ -> true
+                       end
+               end,
+    [{Char, integer_to_list(Char, 16), unicode_util:lookup(Char)}
+     || Char <- lists:seq(1, ?MAX_CHAR), TestCont(Char)].
+
+
 %%%
 %%% Utilities.
 %%%
-
-id(I) -> I.
 
 setlimit(X) ->
     erts_debug:set_internal_state(available_internal_state,true),
     io:format("Setting loop limit, old: ~p, now set to ~p~n",
 	      [erts_debug:set_internal_state(unicode_loop_limit,X),X]).
+
+make_set(ListOfRanges) ->
+    List = lists:foldl(fun add_range/2, [], ListOfRanges),
+    sets:from_list(List).
+
+add_range({A,undefined}, Acc) ->
+    [A|Acc];
+add_range({A,B}, Acc) ->
+    lists:seq(A,B) ++ Acc.
+
+parse_properties(File) ->
+    {ok, Fd} = file:open(File, [read, raw, {read_ahead, 1000000}]),
+    Props0 = foldl(fun parse_properties/2, [], Fd),
+    file:close(Fd),
+    Props1 = sofs:to_external(sofs:relation_to_family(sofs:relation(Props0))),
+    maps:from_list(Props1).
+
+parse_properties(Line0, Acc) ->
+    [Line|_Comments] = tokens(Line0, "#"),
+    [CodePoints, Class | _] = tokens(Line, ";"),
+    case tokens(CodePoints, ".") of
+        [CodePoint] ->
+            [{to_atom(Class), {hex_to_int(CodePoint), undefined}}|Acc];
+        [CodePoint1,"",CodePoint2] ->
+            [{to_atom(Class), {hex_to_int(CodePoint1), hex_to_int(CodePoint2)}}|Acc]
+    end.
+
+hex_to_int([]) -> [];
+hex_to_int(HexStr) ->
+    list_to_integer(string:trim(HexStr, both), 16).
+
+to_atom(Str) ->
+    list_to_atom(string:lowercase(string:trim(Str, both))).
+
+foldl(Fun, Acc, Fd) ->
+    Get = fun() -> file:read_line(Fd) end,
+    foldl_1(Fun, Acc, Get).
+
+foldl_1(_Fun, {done, Acc}, _Get) -> Acc;
+foldl_1(Fun, Acc, Get) ->
+    case Get() of
+        eof -> Acc;
+        {ok, "#" ++ _} -> %% Ignore comments
+            foldl_1(Fun, Acc, Get);
+        {ok, "\n"} -> %% Ignore empty lines
+            foldl_1(Fun, Acc, Get);
+        {ok, Line} ->
+            foldl_1(Fun, Fun(Line, Acc), Get)
+    end.
+
+%% Differs from string:lexemes, it returns empty string as token between two delimiters
+tokens(S, [C]) ->
+    tokens(lists:reverse(S), C, []).
+
+tokens([Sep|S], Sep, Toks) ->
+    tokens(S, Sep, [[]|Toks]);
+tokens([C|S], Sep, Toks) ->
+    tokens_2(S, Sep, Toks, [C]);
+tokens([], _, Toks) ->
+    Toks.
+
+tokens_2([Sep|S], Sep, Toks, Tok) ->
+    tokens(S, Sep, [Tok|Toks]);
+tokens_2([C|S], Sep, Toks, Tok) ->
+    tokens_2(S, Sep, Toks, [C|Tok]);
+tokens_2([], _Sep, Toks, Tok) ->
+    [Tok|Toks].

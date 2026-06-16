@@ -704,7 +704,7 @@ create_files([]) ->
 %% Try zip:unzip/1 on some corrupted zip files.
 bad_zip(Config) when is_list(Config) ->
     ok = file:set_cwd(get_value(priv_dir, Config)),
-    try_bad("bad_crc",    {bad_crc, "abc.txt"}, Config),
+    try_bad("bad_crc",    {"abc.txt", bad_crc}, Config),
     try_bad("bad_central_directory", bad_central_directory, Config),
     try_bad("bad_file_header",    bad_file_header, Config),
     try_bad("bad_eocd",    bad_eocd, Config),
@@ -1089,8 +1089,8 @@ fd_leak(Config) ->
     do_fd_leak(BadExtract, 1),
 
     BadCreate = fun() ->
-                        {error,enoent} = zip:zip("failed.zip",
-                                                 ["none"]),
+                        {error,{"none", {_, enoent}}} = zip:zip("failed.zip",
+                                                      ["none"]),
                         ok
                 end,
     do_fd_leak(BadCreate, 1),
@@ -1315,8 +1315,11 @@ mode(Config) ->
        zip:list_dir(Archive)),
 
     ok = file:make_dir(ExtractDir),
-    ?assertMatch(
-       {ok, ["dir/","dir/nested","exec"]}, unzip(Config, Archive, [{cwd,ExtractDir}])),
+    case unzip(Config, Archive, [{cwd,ExtractDir}]) of
+        {ok, ["dir/","dir/nested","exec"]} -> ok;
+        {ok, ["dir","dir/nested","exec"]} -> ok; %macOS, old unzip
+        UnzipError -> error({unexpected,UnzipError})
+    end,
 
     case un_z64(get_value(unzip, Config)) =/= unemzip of
         true ->

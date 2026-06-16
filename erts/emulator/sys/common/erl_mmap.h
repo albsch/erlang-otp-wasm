@@ -36,9 +36,6 @@
 #ifndef HAVE_MMAP
 #  define HAVE_MMAP 0
 #endif
-#if defined(__EMSCRIPTEN__) /* Emscripten/musl provides no usable mremap() */
-#  undef HAVE_MREMAP
-#endif
 #ifndef HAVE_MREMAP
 #  define HAVE_MREMAP 0
 #endif

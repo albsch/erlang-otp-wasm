@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"9.6.2",
+{"9.7.1",
  [
   {<<"9\\..*">>,[{restart_application, inets}]},
   {<<"8\\..*">>,[{restart_application, inets}]},

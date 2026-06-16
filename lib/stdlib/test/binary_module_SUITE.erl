@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -747,12 +747,13 @@ encode_decode_loop(Range, X) ->
     R = binary:decode_unsigned(make_unaligned(PaddedLittle),little),
     S = binref:decode_unsigned(PaddedLittle,little),
     T = binref:decode_unsigned(PaddedBig),
-    case (((A =:= B) and (B =:= C) and (C =:= D)) and
-						    ((E =:= F)) and
-								  ((N =:= G) and (G =:= H) and (H =:= I) and
-													   (I =:= J) and (J =:= K) and (K =:= L) and (L =:= M)) and
-																				  ((M =:= O) and (O =:= P) and (P =:= Q) and (Q =:= R) and
-																											 (R =:= S) and (S =:= T)))of
+
+    CmpFn = fun(Cmp1) -> fun(Cmp2) -> Cmp2 =:= Cmp1 end end,
+    case
+        lists:all(CmpFn(A), [B, C, D]) andalso
+        E =:= F andalso
+        lists:all(CmpFn(G), [H, I, J, K, L, M, N, O, P, Q, R, S, T])
+    of
 	true ->
 	    encode_decode_loop(Range,X-1);
 	_ ->
@@ -1304,7 +1305,7 @@ do_split_comp(N,H,Opts) ->
     A = ?MASK_ERROR(binref:split(H,N,Opts)),
     D = ?MASK_ERROR(binary:split(H,binary:compile_pattern(N),Opts)),
     if
-	(A =/= [N]) and is_list(A) ->
+	A =/= [N] andalso is_list(A) ->
 	    put(success_counter,get(success_counter)+1);
 	true ->
 	    ok
@@ -1352,7 +1353,7 @@ do_replace_comp(N,H,R,Opts) ->
     A = ?MASK_ERROR(binref:replace(H,N,R,Opts)),
     D = ?MASK_ERROR(binary:replace(H,binary:compile_pattern(N),R,Opts)),
     if
-	(A =/= N) and is_binary(A) ->
+	A =/= N andalso is_binary(A) ->
 	    put(success_counter,get(success_counter)+1);
 	true ->
 	    ok
@@ -1597,7 +1598,8 @@ join(Config) when is_list(Config) ->
     ~"" = binary:join([], ~", ").
 
 doctests(_Config) ->
-    shell_docs:test(binary, []).
+    ct_doctest:module(binary, [{skipped_blocks, 1},
+                                {missing_tests, [{list_to_bin, 1}]}]).
 
 %%%
 %%% Utilities.

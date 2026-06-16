@@ -21,7 +21,7 @@
 %%
 {application, erts, [
 	{description, "ERTS  CXC 138 10"},
-	{vsn, "16.4"},
+	{vsn, "17.0.2"},
 	{modules, [
 		%% preloaded
 		erlang,

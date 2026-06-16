@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2023-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2023-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,9 @@ extern int  esaio_init(unsigned int     numThreads,
                        const ESockData* dataP);
 extern void esaio_finish(void);
 extern ERL_NIF_TERM esaio_info(ErlNifEnv* env);
+extern ERL_NIF_TERM esaio_command(ErlNifEnv*   env,
+                                  ERL_NIF_TERM command,
+                                  ERL_NIF_TERM cdata);
 
 /*
 extern ERL_NIF_TERM esaio_open_with_fd(ErlNifEnv*       env,
@@ -53,6 +56,7 @@ extern ERL_NIF_TERM esaio_bind(ErlNifEnv*       env,
                                ESockDescriptor* descP,
                                ESockAddress*    sockAddrP,
                                SOCKLEN_T        addrLen);
+/* No esaio_bindx */
 extern ERL_NIF_TERM esaio_connect(ErlNifEnv*       env,
                                   ESockDescriptor* descP,
                                   ERL_NIF_TERM     sockRef,

@@ -140,6 +140,8 @@
 
 -include("mnesia_test_lib.hrl").
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 %% included for test server compatibility
@@ -473,7 +475,7 @@ default_module(DefaultModule, TestCases) when is_list(TestCases) ->
 		      T -> {true, {DefaultModule, T}}
 		  end
 	  end,
-    lists:zf(Fun, TestCases).
+    lists:filtermap(Fun, TestCases).
 
 get_suite(Module, TestCase, Config) ->
     case get_suite(Module, TestCase) of
@@ -1108,7 +1110,7 @@ verify_replica_location(Tab, DiscOnly0, Ram0, Disc0, AliveNodes0) ->
 
 ignore_dead(Nodes, AliveNodes) ->
     Filter = fun(Node) -> lists:member(Node, AliveNodes) end,
-    lists:sort(lists:zf(Filter, Nodes)).
+    lists:sort(lists:filtermap(Filter, Nodes)).
 
 
 remote_activate_debug_fun(N, I, F, C, File, Line) ->

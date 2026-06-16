@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2005-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2005-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -28,10 +28,14 @@ This module provides an expand_fun for the erlang shell
 [`io:setopts/1,2`](`io:setopts/1`).
 """.
 -moduledoc(#{since => "OTP 26.0"}).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 %% a default expand function for edlin, expanding modules, functions
 %% filepaths, variable binding, record names, function parameter values,
 %% record fields and map keys and record field values.
 -include_lib("kernel/include/eep48.hrl").
+
 -export([expand/1, expand/2, expand/3, format_matches/2, number_matches/1, get_exports/1,
          shell_default_or_bif/1, bif/1, over_word/1]).
 -export([is_type/3, match_arguments1/3]).
@@ -1017,7 +1021,7 @@ match(Prefix, Alts, Extra0) ->
     Len = string:length(Prefix),
     Matches = lists:sort(
                 [{S, A} || {H, A} <- Alts2,
-                           lists:prefix(Prefix, S=flat_write(H))]),
+                           S <- [flat_write(H)], lists:prefix(Prefix, S)]),
     Matches2 = lists:usort(
                  case Extra0 of
                      [] -> [{S,[]} || {S,_} <- Matches];

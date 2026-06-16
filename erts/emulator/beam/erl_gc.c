@@ -708,13 +708,7 @@ check_for_possibly_long_gc(Process *p, Uint ygen_usage)
         else
             sz += (Uint) len;
     }
-    if (sz >= ERTS_POTENTIALLY_LONG_GC_HSIZE && erts_no_dirty_cpu_schedulers > 0) {
-        /*
-         * Only defer a long GC to a dirty CPU scheduler when one exists. In the
-         * single-threaded build (erts_no_dirty_cpu_schedulers == 0) there is no
-         * dirty run queue to service it, so fall through and let the GC run
-         * inline on the current (normal) scheduler. See erl_init.c.
-         */
+    if (sz >= ERTS_POTENTIALLY_LONG_GC_HSIZE) {
         ASSERT(!(p->flags & (F_DISABLE_GC|F_DELAY_GC)));
 	p->flags |= major ? F_DIRTY_MAJOR_GC : F_DIRTY_MINOR_GC;
         erts_schedule_dirty_sys_execution(p);
@@ -2529,6 +2523,7 @@ erts_copy_one_frag(Eterm** hpp, ErlOffHeap* off_heap,
 	    *hp++ = val;
 	    switch (val & _HEADER_SUBTAG_MASK) {
 	    case ARITYVAL_SUBTAG:
+	    case RECORD_SUBTAG:
 		break;
 	    case REF_SUBTAG:
 		if (!is_magic_ref_thing(fhp - 1))
@@ -3988,6 +3983,7 @@ check_all_heap_terms_in_range(int (*check_eterm)(Eterm),
         case TAG_PRIMARY_HEADER:
             switch (val & _HEADER_SUBTAG_MASK) {
             case ARITYVAL_SUBTAG:
+            case RECORD_SUBTAG:
                 break;
             case BIN_REF_SUBTAG:
             case EXTERNAL_PID_SUBTAG:

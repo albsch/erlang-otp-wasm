@@ -4,7 +4,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -65,10 +65,12 @@ A string describing the error is obtained with the following call:
 Module:format_error(ErrorDescriptor)
 ```
 
-## See Also
+### See Also
 
 `m:epp`, `m:erl_parse`
 """.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([module/1,module/2,module/3,format_error/1]).
 -export([exprs/2,exprs_opt/3,used_vars/2]). % Used from erl_eval.erl.
@@ -168,6 +170,7 @@ value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
               :: #{ta() := [used_type()]}
          }).
 
+-type record_flavor() :: 'tuple' | 'native'.
 
 %% Define the lint state record.
 %% 'called' and 'exports' contain {Anno, {Function, Arity}},
@@ -179,20 +182,24 @@ value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
                imports=[] :: orddict:orddict(fa(), module()),%Imports
                remote_self_calls=#{} :: #{ fa() => gb_sets:set() },
                compile=[],                      %Compile flags
-               records=maps:new()               %Record definitions
-                   :: #{atom() => {anno(),Fields :: term()}},
+               records=maps:new()                %Record definitions
+                   :: #{atom() => {anno(),record_flavor(),Fields :: term()}},
                locals=gb_sets:empty()     %All defined functions (prescanned)
                    :: gb_sets:set(fa()),
                no_auto={set, gb_sets:empty()} %Functions explicitly not autoimported
                    :: 'all' | {set, gb_sets:set(fa())},
+               rec_imports=#{} :: #{atom() => module()},
                defined=gb_sets:empty()          %Defined fuctions
                    :: gb_sets:set(fa()),
 	       on_load=[] :: [fa()],		%On-load function
 	       on_load_anno=erl_anno:new(0)	%Location for on_load
                    :: erl_anno:anno(),
 	       clashes=[],			%Exported functions named as BIFs
-               not_deprecated=[],               %Not considered deprecated
+               not_deprecated=gb_sets:empty()   %Not considered deprecated
+                   :: gb_sets:set(module_or_mfa()),
                not_removed=gb_sets:empty()      %Not considered removed
+                   :: gb_sets:set(module_or_mfa()),
+               not_unsafe=gb_sets:empty()       %Not considered unsafe
                    :: gb_sets:set(module_or_mfa()),
                func=[],                         %Current function
                type_id=[],                      %Current type id
@@ -221,6 +228,7 @@ value_option(Flag, Default, On, OnVal, Off, OffVal, Opts) ->
                    :: #{ta() => #typeinfo{}},
                exp_types=gb_sets:empty()        %Exported types
                    :: gb_sets:set(ta()),
+               features = [],                   %Enabled features
                feature_keywords =               %Keywords in
                                                 %configurable features
                    feature_keywords() :: #{atom() => atom()},
@@ -306,6 +314,11 @@ format_error_1({bad_removed,{F,A}}) when F =:= '_'; A =:= '_' ->
      [F,A]};
 format_error_1({bad_removed,{F,A}}) ->
     {~"removed function ~tw/~w is still exported", [F,A]};
+format_error_1({invalid_unsafe,D}) ->
+    {~"badly formed unsafe attribute ~tw", [D]};
+format_error_1({bad_unsafe,{F,A}}) ->
+    {~"unsafe function ~tw/~w undefined or not exported",
+     [F,A]};
 format_error_1({bad_nowarn_unused_function,{F,A}}) ->
     {~"function ~tw/~w undefined", [F,A]};
 format_error_1({bad_nowarn_unused_function,{F,A},GuessFA}) ->
@@ -334,6 +347,8 @@ format_error_1({undefined_on_load,{F,A},GuessF}) ->
     {~"function ~tw/~w undefined, did you mean ~ts/~w?", [F,A,GuessF,A]};
 format_error_1(nif_inline) ->
     ~"inlining is enabled - local calls to NIFs may call their Erlang implementation instead";
+format_error_1(bad_export_record) ->
+    ~"badly formed -export_record(); expected a list of record names";
 
 format_error_1(export_all) ->
     ~"export_all flag enabled - all functions will be exported";
@@ -365,34 +380,61 @@ format_error_1({redefine_bif_import,{F,A}}) ->
       import directive overrides auto-imported BIF ~w/~w --
       use "-compile({no_auto_import,[~w/~w]})." to resolve name clash
       """, [F,A,F,A]};
-format_error_1({deprecated, MFA, String, Rel}) ->
+format_error_1({obsolete_bool_op, OldOp, NewOp}) ->
+    String =
+        ("use the short circuiting " ++ NewOp ++ " instead.\nThe "
+         ++ OldOp ++ " "
+         ++ ~"""
+         operator, which always evaluates both sides, could be
+         removed in a future version of Erlang/OTP.
+         Note that the 'and' and 'or' operators have unexpected precedence, so
+         that e.g. `X > 3 or is_tuple(X)` parses as `X > (3 or is_tuple(X))`.
+         Compile directive 'nowarn_obsolete_bool_op' can be used to suppress
+         warnings in selected modules.
+         """),
+    format_error_1({deprecated, OldOp, String});
+format_error_1({deprecated, MFA, String, Rel}) when is_tuple(MFA) ->
+     format_error_1({deprecated, format_mfa(MFA), String, Rel});
+format_error_1({deprecated, Thing, Info, Rel}) ->
     {~"~s is deprecated and will be removed in ~s; ~s",
-     [format_mfa(MFA), Rel, String]};
-format_error_1({deprecated, MFA, String}) when is_list(String) ->
-    {~"~s is deprecated; ~s", [format_mfa(MFA), String]};
-format_error_1({deprecated_type, {M1, F1, A1}, String, Rel}) ->
+     [Thing, Rel, format_obsolete(Info)]};
+format_error_1({deprecated, MFA, String}) when is_tuple(MFA) ->
+    format_error_1({deprecated, format_mfa(MFA), String});
+format_error_1({deprecated, Thing, Info}) ->
+    {~"~s is deprecated; ~s", [Thing, format_obsolete(Info)]};
+format_error_1({unsafe, MFA, Info, Rel}) ->
+    {~"~s is unsafe and will be removed in ~s; ~s",
+     [format_mfa(MFA), Rel, format_obsolete(Info)]};
+format_error_1({unsafe, MFA, Info}) ->
+    {~"~s is unsafe; ~s", [format_mfa(MFA), format_obsolete(Info)]};
+format_error_1({deprecated_type, {M1, F1, A1}, Info, Rel}) ->
     {~"the type ~p:~p~s is deprecated and will be removed in ~s; ~s",
-                  [M1, F1, gen_type_paren(A1), Rel, String]};
-format_error_1({deprecated_type, {M1, F1, A1}, String}) when is_list(String) ->
+                  [M1, F1, gen_type_paren(A1), Rel, format_obsolete(Info)]};
+format_error_1({deprecated_type, {M1, F1, A1}, Info}) ->
     {~"the type ~p:~p~s is deprecated; ~s",
-                  [M1, F1, gen_type_paren(A1), String]};
-format_error_1({deprecated_callback, {M1, F1, A1}, String, Rel}) ->
+                  [M1, F1, gen_type_paren(A1), format_obsolete(Info)]};
+format_error_1({deprecated_callback, {M1, F1, A1}, Info, Rel}) ->
     {~"the callback ~p:~p~s is deprecated and will be removed in ~s; ~s",
-                  [M1, F1, gen_type_paren(A1), Rel, String]};
-format_error_1({deprecated_callback, {M1, F1, A1}, String}) when is_list(String) ->
+                  [M1, F1, gen_type_paren(A1), Rel, format_obsolete(Info)]};
+format_error_1({deprecated_callback, {M1, F1, A1}, Info}) ->
     {~"the callback ~p:~p~s is deprecated; ~s",
-                  [M1, F1, gen_type_paren(A1), String]};
+                  [M1, F1, gen_type_paren(A1), format_obsolete(Info)]};
 format_error_1({removed, MFA, ReplacementMFA, Rel}) ->
     {~"call to ~s will fail, since it was removed in ~s; use ~s",
      [format_mfa(MFA), Rel, format_mfa(ReplacementMFA)]};
-format_error_1({removed, MFA, String}) when is_list(String) ->
-    {~"~s is removed; ~s", [format_mfa(MFA), String]};
-format_error_1({removed_type, MNA, String}) ->
-    {~"the type ~s is removed; ~s", [format_mna(MNA), String]};
-format_error_1({removed_callback, MNA, String}) ->
-    {~"the callback ~s is removed; ~s", [format_mna(MNA), String]};
+format_error_1({removed, MFA, Info}) ->
+    {~"~s is removed; ~s", [format_mfa(MFA), format_obsolete(Info)]};
+format_error_1({removed_type, MNA, Info}) ->
+    {~"the type ~s is removed; ~s",
+     [format_mna(MNA), format_obsolete(Info)]};
+format_error_1({removed_callback, MNA, Info}) ->
+    {~"the callback ~s is removed; ~s",
+     [format_mna(MNA), format_obsolete(Info)]};
 format_error_1({obsolete_guard, {F, A}}) ->
-    {~"~p/~p obsolete (use is_~p/~p)", [F, A, F, A]};
+    {~"""
+      ~p/~p as a type test is obsolete and will be
+      removed in OTP 30; use is_~p/~p instead.
+      """, [F, A, F, A]};
 format_error_1({obsolete_guard_overridden,Test}) ->
     {~"""
       obsolete ~s/1 (meaning is_~s/1) is illegal when there is a
@@ -404,6 +446,15 @@ format_error_1(update_literal) ->
     ~"expression updates a literal";
 format_error_1(illegal_zip_generator) ->
     ~"only generators are allowed in a zip generator.";
+format_error_1(compr_assign) ->
+    ~"""
+     matches using '=' are not allowed in comprehension qualifiers
+     unless the experimental 'compr_assign' language feature is enabled.
+     With 'compr_assign' enabled, a match 'P = E' will behave as a
+     strict generator 'P <:- [E]'."
+     """;
+format_error_1(illegal_map_exact_in_comprehension) ->
+    ~"illegal map association, did you mean to use `=>`?";
 %% --- patterns and guards ---
 format_error_1(illegal_map_assoc_in_pattern) -> ~"illegal pattern, did you mean to use `:=`?";
 format_error_1(illegal_pattern) -> ~"illegal pattern";
@@ -428,13 +479,40 @@ format_error_1({undefined_record,T,GuessT}) ->
 format_error_1({redefine_record,T}) ->
     {~"record ~tw already defined", [T]};
 format_error_1({redefine_field,T,F}) ->
-    {~"field ~tw already defined in record ~tw", [F,T]};
+    {~"field ~tw already defined in record ~ts", [F,format_record_name(T)]};
+format_error_1({redefine_imported_record,{Mod,R}}) ->
+    {~"record ~tw already imported from ~w", [R,Mod]};
+format_error_1({redefine_local_record,R}) ->
+    {~"record ~ts is already defined locally", [format_record_name(R)]};
+format_error_1({undefined_native_record,T}) ->
+    {~"native record ~tw undefined", [T]};
+format_error_1({novalue,N,F}) ->
+    {~"field ~tw is not initialized in native record ~ts",
+     [F,format_record_name(N)]};
+format_error_1({illegal_native_record_default,N,F}) ->
+    {~"illegal default value for field ~tw in native record ~tw", [F,N]};
+format_error_1({native_record_illegal_record_index,Name,F}) ->
+    {~"syntax #~tw.~tw is only supported for tuple records",
+     [Name,F]};
+format_error_1(native_record_in_guard) ->
+    ~"creating a record in a guard is only supported for tuple records";
+format_error_1(native_record_illegal_multi_field_init) ->
+    ~"multi-field initialization (assigning to _) is only supported for tuple records";
+format_error_1({native_record_already_exported,N}) ->
+    {~"native record ~tw already exported",[N]};
+format_error_1(native_record_field_types) ->
+    ~"native records do not allow special field types";
+format_error_1(tuple_record_export) ->
+    ~"tuple records cannot be exported; only native records can";
 format_error_1(bad_multi_field_init) ->
     {~"'_' initializes no omitted fields", []};
 format_error_1({undefined_field,T,F}) ->
-    {~"field ~tw undefined in record ~tw", [F,T]};
+    {~"field ~tw undefined in record ~ts", [F,format_record_name(T)]};
 format_error_1({undefined_field,T,F,GuessF}) ->
-    {~"field ~tw undefined in record ~tw, did you mean ~ts?", [F,T,GuessF]};
+    {~"field ~tw undefined in record ~tw, did you mean ~ts?",
+     [F,format_record_name(T),GuessF]};
+format_error_1(native_record_illegal_record_info) ->
+    ~"record_info/2 is only supported for tuple records";
 format_error_1(illegal_record_info) ->
     ~"illegal record info";
 format_error_1({field_name_is_variable,T,F}) ->
@@ -445,6 +523,8 @@ format_error_1({unused_record,T}) ->
     {~"record ~tw is unused", [T]};
 format_error_1({untyped_record,T}) ->
     {~"record ~tw has field(s) without type information", [T]};
+format_error_1({native_record_header,T}) ->
+    {~"record ~tw is defined in a header file", [T]};
 %% --- variables ----
 format_error_1({unbound_var,V}) ->
     {~"variable ~w is unbound", [V]};
@@ -453,6 +533,15 @@ format_error_1({unbound_var,V,GuessV}) ->
 format_error_1({unsafe_var,V,{What,Where}}) ->
     {~"variable ~w unsafe in ~w ~s",
                   [V,What,format_where(Where)]};
+format_error_1({export_var_subexpr,V,{What,Where}}) ->
+    {~"""
+      variable ~w exported from ~w ~s.
+      Exporting bindings from subexpressions other than block expressions is
+      deprecated and may yield an error in a future version of Erlang/OTP.
+      Please move the binding of ~w out of the ~w.
+      Compile directive 'nowarn_export_var_subexpr' can be used to suppress
+      warnings in selected modules.
+      """, [V,What,format_where(Where),V,What]};
 format_error_1({exported_var,V,{What,Where}}) ->
     {~"variable ~w exported from ~w ~s",
                   [V,What,format_where(Where)]};
@@ -467,6 +556,15 @@ format_error_1({match_underscore_var_pat, V}) ->
       If you mean to ignore this value, use '_' or
       a different underscore-prefixed name
       """, [V]};
+format_error_1(match_alias_pats) ->
+    ~"""
+     a pattern `P1=P2` where both sides are constructors
+     may yield an error in a future version of Erlang/OTP.
+     Note that a pattern such as `{a,B}={Y,Z} -> ...` can always be
+     written in a unified form `{a=Y,B=Z} -> ...`.
+     Compile directive 'nowarn_match_alias_pats' can be used to suppress
+     warnings in selected modules.
+     """;
 format_error_1({shadowed_var,V,In}) ->
     {~"variable ~w shadowed in ~w", [V,In]};
 format_error_1({unused_var, V}) ->
@@ -592,8 +690,7 @@ format_error_1({deprecated_builtin_type, {Name, Arity},
      [Name, Arity, Rel, UseS]};
 format_error_1(deprecated_catch) ->
     ~"""
-     'catch ...' is deprecated and will be removed in a
-     future version of Erlang/OTP; please use 'try ... catch ... end' instead.
+     'catch ...' is deprecated; please use 'try ... catch ... end' instead.
      Compile directive 'nowarn_deprecated_catch' can be used to suppress
      warnings in selected modules.
      """;
@@ -635,6 +732,28 @@ format_where(L) when is_integer(L) ->
     io_lib:format("(line ~p)", [L]);
 format_where({L,C}) when is_integer(L), is_integer(C) ->
     io_lib:format("(line ~p, column ~p)", [L, C]).
+
+format_record_name({Mod, Name}) ->
+    io_lib:format(~"#~tw:~tw", [Mod,Name]);
+format_record_name(Name) when is_atom(Name) ->
+    io_lib:format(~"~ts", [Name]).
+
+format_obsolete(undefined) ->
+    "see the documentation for details";
+format_obsolete(next_version) ->
+    "will be removed in the next version. "
+        "See the documentation for details";
+format_obsolete(next_major_release) ->
+    "will be removed in the next major release. "
+        "See the documentation for details";
+format_obsolete(eventually) ->
+    "will be removed in a future release. "
+        "See the documentation for details";
+format_obsolete(possibly) ->
+    "however, it is possible to use it safely under some conditions. "
+        "See the documentation for details";
+format_obsolete(String) when is_list(String) ->
+    String.
 
 %% Local functions that are somehow automatically generated.
 
@@ -743,9 +862,6 @@ entries in the list of errors.
       ErrorInfo :: error_info()).
 
 module(Forms, FileName, Opts0) ->
-    %% FIXME Hmm, this is not coherent with the semantics of features
-    %% We want the options given on the command line to take
-    %% precedence over options in the module.
     Opts = Opts0 ++ compiler_options(Forms),
     St = forms(Forms, start(FileName, Opts)),
     return_status(St).
@@ -769,6 +885,10 @@ start(File, Opts) ->
 		false ->
 		    undefined
 	    end,
+    %% note: `-feature declarations are collected and stripped by epp,
+    %% and the compiler presents the total set of enabled features as
+    %% the option `{features, ...}` to erl_lint and other passes; they
+    %% do not change after the epp pass
     #lint{state = start,
           exports = gb_sets:from_list([{module_info,0},{module_info,1}]),
           compile = Opts,
@@ -780,6 +900,7 @@ start(File, Opts) ->
 				     nowarn_format, 0, Opts),
 	  enabled_warnings = Enabled,
           nowarn_bif_clash = nowarn_function(nowarn_bif_clash, Opts),
+          features = proplists:get_value(features, Opts, []),
           file = File
          }.
 
@@ -823,6 +944,7 @@ bool_options() ->
      {underscore_match,true},
      {export_all,true},
      {export_vars,false},
+     {export_var_subexpr,true},
      {shadow_vars,true},
      {unused_import,false},
      {unused_function,true},
@@ -832,8 +954,9 @@ bool_options() ->
      {deprecated_function,true},
      {deprecated_type,true},
      {deprecated_callback,true},
-     {deprecated_catch,false},
+     {deprecated_catch,true},
      {obsolete_guard,true},
+     {obsolete_bool_op,false},
      {untyped_record,false},
      {missing_spec,false},
      {missing_spec_documented,false},
@@ -843,6 +966,7 @@ bool_options() ->
      {keywords,false},
      {redefined_builtin_type,true},
      {match_float_zero,true},
+     {match_alias_pats,true},
      {update_literal,true},
      {behaviours,true},
      {conflicting_behaviours,true},
@@ -851,7 +975,12 @@ bool_options() ->
      {undefined_behaviour_callbacks,true},
      {ill_defined_behaviour_callbacks,true},
      {ill_defined_optional_callbacks,true},
-     {unexported_function,true}].
+     {unexported_function,true},
+     {novalue,true},
+     {undefined_field,true},
+     {unsafe_function,true},
+     {possibly_unsafe_function,false},
+     {native_record_header,true}].
 
 %% is_warn_enabled(Category, St) -> boolean().
 %%  Check whether a warning of category Category is enabled.
@@ -942,12 +1071,13 @@ forms(Forms0, St0) ->
     AutoImportSuppressed = auto_import_suppressed(St0#lint.compile),
     StDeprecated = disallowed_compile_flags(Forms,St0),
     St1 = includes_qlc_hrl(Forms, StDeprecated#lint{locals = Locals,
-						    no_auto = AutoImportSuppressed}),
+                                                    no_auto = AutoImportSuppressed}),
     St2 = bif_clashes(Forms, St1),
     St3 = not_deprecated(Forms, St2),
     St4 = not_removed(Forms, St3),
-    St5 = foldl(fun form/2, pre_scan(Forms, St4), Forms),
-    post_traversal_check(Forms, St5).
+    St5 = not_unsafe(Forms, St4),
+    St6 = foldl(fun form/2, pre_scan(Forms, St5), Forms),
+    post_traversal_check(Forms, St6).
 
 pre_scan([{attribute,A,compile,C} | Fs], St) ->
     case is_warn_enabled(export_all, St) andalso
@@ -1046,8 +1176,12 @@ attribute_state({attribute,A,export_type,Es}, St) ->
     export_type(A, Es, St);
 attribute_state({attribute,A,import,Is}, St) ->
     import(A, Is, St);
+attribute_state({attribute,A,import_record,Ss}, St) ->
+    import_native_record(A, Ss, St);
 attribute_state({attribute,A,record,{Name,Fields}}, St) ->
-    record_def(A, Name, Fields, St);
+    record_def(A, tuple, Name, Fields, St);
+attribute_state({attribute,A,native_record,{Name,Fields}}, St) ->
+    record_def(A, native, Name, Fields, St);
 attribute_state({attribute,Aa,behaviour,Behaviour}, St) ->
     St#lint{behaviour=St#lint.behaviour ++ [{Aa,Behaviour}]};
 attribute_state({attribute,Aa,behavior,Behaviour}, St) ->
@@ -1135,7 +1269,11 @@ untrack_doc(_KFA, St) ->
 %%  Dialyzer attributes are also allowed everywhere.
 
 function_state({attribute,A,record,{Name,Fields}}, St) ->
-    record_def(A, Name, Fields, St);
+    record_def(A, tuple, Name, Fields, St);
+function_state({attribute,A,native_record,{Name,Fields}}, St) ->
+    record_def(A, native, Name, Fields, St);
+function_state({attribute,A,import_record,Ss}, St) ->
+    import_native_record(A, Ss, St);
 function_state({attribute,A,type,{TypeName,TypeDef,Args}}, St) ->
     St1 = untrack_doc({type, TypeName, length(Args)}, St),
     type_def(type, A, TypeName, TypeDef, Args, St1);
@@ -1189,7 +1327,7 @@ not_deprecated(Forms, #lint{compile=Opts}=St0) ->
     St1 = foldl(fun ({M,Anno}, St2) ->
                         check_module_name(M, Anno, St2)
                 end, St0, MAnno),
-    St1#lint{not_deprecated = ordsets:from_list(Nowarn)}.
+    St1#lint{not_deprecated = gb_sets:from_list(Nowarn)}.
 
 %% not_removed(Forms, State0) -> State
 
@@ -1208,6 +1346,23 @@ not_removed(Forms, #lint{compile=Opts}=St0) ->
                         check_module_name(M, Anno, St2)
                 end, St0, MFAsAnno),
     St1#lint{not_removed = gb_sets:from_list(Nowarn)}.
+
+%% not_unsafe(Forms, State0) -> State
+
+not_unsafe(Forms, #lint{compile=Opts}=St0) ->
+    %% There are no line numbers in St0#lint.compile.
+    MFAsAnno = [{MFA,Anno} ||
+                {attribute, Anno, compile, Args} <- Forms,
+                {nowarn_unsafe_function, MFAs0} <- lists:flatten([Args]),
+                MFA <- lists:flatten([MFAs0])],
+    Nowarn = [MFA ||
+                 {nowarn_unsafe_function, MFAs0} <- Opts,
+                 MFA <- lists:flatten([MFAs0])],
+    MAnno = [{M,Anno} || {{M,_F,_A},Anno} <- MFAsAnno, is_atom(M)],
+    St1 = foldl(fun ({M,Anno}, St2) ->
+                        check_module_name(M, Anno, St2)
+                end, St0, MAnno),
+    St1#lint{not_unsafe = gb_sets:from_list(Nowarn)}.
 
 %% The nowarn_bif_clash directive is not only deprecated, it's actually an error from R14A
 disallowed_compile_flags(Forms, St0) ->
@@ -1247,13 +1402,16 @@ post_traversal_check(Forms, St0) ->
     StB = check_unused_types(Forms, StA),
     StC = check_untyped_records(Forms, StB),
     StD = check_on_load(StC),
-    StE = check_unused_records(Forms, StD),
-    StF = check_local_opaque_types(StE),
-    StG = check_dialyzer_attribute(Forms, StF),
-    StH = check_callback_information(StG),
-    StI = check_nifs(Forms, StH),
-    StJ = check_unexported_functions(StI),
-    check_removed(Forms, StJ).
+    StE = check_export_record(Forms, StD),
+    StF = check_unused_records(Forms, StE),
+    StG = check_native_records_header(Forms, StF),
+    StH = check_local_opaque_types(StG),
+    StI = check_dialyzer_attribute(Forms, StH),
+    StJ = check_callback_information(StI),
+    StK = check_nifs(Forms, StJ),
+    StL = check_unexported_functions(StK),
+    StM = check_removed(Forms, StL),
+    check_unsafe(Forms, StM).
 
 %% check_behaviour(State0) -> State
 %% Check that the behaviour attribute is valid.
@@ -1503,6 +1661,58 @@ removed_desc([Char | Str]) when is_integer(Char) -> removed_desc(Str);
 removed_desc([]) -> true;
 removed_desc(_) -> false.
 
+%% check_unsafe(Forms, State0) -> State
+
+check_unsafe(Forms, St0) ->
+    Exports = exports(St0),
+    X = ignore_predefined_funcs(gb_sets:to_list(Exports)),
+    #lint{module = Mod} = St0,
+    Bad = [{E,Anno} || {attribute, Anno, unsafe, Us} <- Forms,
+                    D <- lists:flatten([Us]),
+                    E <- unsafe_cat(D, X, Mod)],
+    foldl(fun ({E,Anno}, St1) ->
+                  add_error(Anno, E, St1)
+          end, St0, Bad).
+
+unsafe_cat({F, A, Flg}=D, X, Mod) ->
+    case unsafe_flag(Flg) of
+        false -> [{invalid_unsafe,D}];
+        true -> unsafe_fa(F, A, X, Mod)
+    end;
+unsafe_cat({F, A}, X, Mod) ->
+    unsafe_fa(F, A, X, Mod);
+unsafe_cat(module, _X, _Mod) ->
+    [];
+unsafe_cat(D, _X, _Mod) ->
+    [{invalid_unsafe,D}].
+
+unsafe_fa('_', '_', _X, _Mod) ->
+    [];
+unsafe_fa(F, '_', X, _Mod) when is_atom(F) ->
+    %% Don't use this syntax for built-in functions.
+    case lists:filter(fun({F1,_}) -> F1 =:= F end, X) of
+        [] -> [{bad_unsafe,{F,'_'}}];
+        _ -> []
+    end;
+unsafe_fa(F, A, X, Mod) when is_atom(F), is_integer(A), A >= 0 ->
+    case lists:member({F,A}, X) of
+        true -> [];
+        false ->
+            case erlang:is_builtin(Mod, F, A) of
+                true -> [];
+                false -> [{bad_unsafe,{F,A}}]
+            end
+    end;
+unsafe_fa(F, A, _X, _Mod) ->
+    [{invalid_unsafe,{F,A}}].
+
+unsafe_flag(possibly) -> true;
+unsafe_flag(String) -> unsafe_desc(String).
+
+unsafe_desc([Char | Str]) when is_integer(Char) -> unsafe_desc(Str);
+unsafe_desc([]) -> true;
+unsafe_desc(_) -> false.
+
 %% Ignores functions added by erl_internal:add_predefined_functions/1
 ignore_predefined_funcs([{behaviour_info,1} | Fs]) ->
     ignore_predefined_funcs(Fs);
@@ -1721,7 +1931,7 @@ check_untyped_records(Forms, St0) ->
 					  (_) -> false
 				      end, Fields)],
 	    foldl(fun (N, St) ->
-			  {Anno, Fields} = map_get(N, St0#lint.records),
+			  {Anno, _Flavor, Fields} = map_get(N, St0#lint.records),
 			  case Fields of
 			      [] -> St; % exclude records with no fields
 			      [_|_] -> add_warning(Anno, {untyped_record, N}, St)
@@ -1742,7 +1952,7 @@ check_unused_records(Forms, St0) ->
                           {nowarn_unused_record, Recs0} <- lists:flatten([Args]),
                           Rec <- lists:flatten([Recs0])],
             St1 = foldl(fun ({Rec, Anno}, St2) ->
-                                exist_record(Anno, Rec, St2)
+                                exist_any_record(Anno, Rec, St2)
                         end, St0, RecAnno),
             %% The check is a bit imprecise in that uses from unused
             %% functions count.
@@ -1752,11 +1962,25 @@ check_unused_records(Forms, St0) ->
                                          maps:remove(Used, Recs)
                                  end, St1#lint.records, UsedRecords),
             Unused = [{Name,Anno} ||
-                         Name := {Anno,_Fields} <- URecs,
+                         Name := {Anno,_Flavor,_Fields} <:- URecs,
                          element(1, loc(Anno, St1)) =:= FirstFile],
             foldl(fun ({N,Anno}, St) ->
                           add_warning(Anno, {unused_record, N}, St)
                   end, St1, Unused);
+        _ ->
+            St0
+    end.
+
+check_native_records_header(Forms, #lint{records = Records}=St0) ->
+    AttrFiles = [File || {attribute,_A,file,{File,_Line}} <- Forms],
+    case {is_warn_enabled(native_record_header, St0),AttrFiles} of
+        {true,[FirstFile|_]} ->
+            InHeader = [{Name,Anno} ||
+                Name := {Anno,native,_Fields} <- Records,
+                element(1, loc(Anno, St0)) =/= FirstFile],
+            foldl(fun ({N,Anno}, St) ->
+                          add_warning(Anno, {native_record_header, N}, St)
+                  end, St0, InHeader);
         _ ->
             St0
     end.
@@ -1786,6 +2010,42 @@ check_callback_information(#lint{callbacks = Callbacks,
                     maps:fold(FoldFun, St1, Callbacks)
 	    end
     end.
+
+check_export_record(Forms, #lint{records=Recs}=St) ->
+    check_export_record_1(Forms, Recs, sets:new(), St).
+
+check_export_record_1([{attribute,A,export_record,Es}|Fs], Recs, Seen0, St0) ->
+    {Seen,St} = check_export_record_2(A, Es, Recs, Seen0, St0),
+    check_export_record_1(Fs, Recs, Seen, St);
+check_export_record_1([_|Fs], Recs, Seen, St) ->
+    check_export_record_1(Fs, Recs, Seen, St);
+check_export_record_1([], _, _, St) -> St.
+
+check_export_record_2(A, [R|Rs], Recs, Seen0, St0) when is_atom(R) ->
+    case sets:is_element(R, Seen0) of
+        true ->
+            St = add_error(A, {native_record_already_exported,R}, St0),
+            check_export_record_2(A, Rs, Recs, Seen0, St);
+        false ->
+            Seen = sets:add_element(R, Seen0),
+            case Recs of
+                #{R := {_,tuple,_}} ->
+                    St1 = used_record(R, St0),
+                    St = add_error(A, tuple_record_export, St1),
+                    check_export_record_2(A, Rs, Recs, Seen, St);
+                #{R := {_,native,_}} ->
+                    St1 = used_record(R, St0),
+                    check_export_record_2(A, Rs, Recs, Seen0, St1);
+                #{} ->
+                    St = add_error(A, {undefined_native_record,R}, St0),
+                    check_export_record_2(A, Rs, Recs, Seen, St)
+            end
+    end;
+check_export_record_2(_A, [], _Recs, Seen, St) ->
+    {Seen,St};
+check_export_record_2(A, _, _Recs, Seen, St0) ->
+    St = add_error(A, bad_export_record, St0),
+    {Seen,St}.
 
 %% For storing the import list we use the orddict module.
 %% We know an empty set is [].
@@ -1857,7 +2117,7 @@ import(Anno, {Mod,Fs}, St00) ->
 				  (not bif_clash_specifically_disabled(St0,{F,A})),
 			      AutoImpSup = is_autoimport_suppressed(St0#lint.no_auto,{F,A}),
 			      {Err,if
-				       Warn and (not AutoImpSup) ->
+				       Warn, not AutoImpSup ->
 					   add_warning
 					     (Anno,
 					      {redefine_bif_import, {F,A}},
@@ -1897,6 +2157,38 @@ check_imports(_Anno, Fs, Is) ->
 add_imports(Mod, Fs, Is) ->
     foldl(fun (F, Is0) -> orddict:store(F, Mod, Is0) end, Is, Fs).
 
+-spec import_native_record(anno(), {module(), [atom()]}, lint_state()) -> lint_state().
+import_native_record(Anno, {Mod, Rs}, #lint{rec_imports=Imports,
+                                            records=Records}=St0) ->
+    St = check_module_name(Mod, Anno, St0),
+    case check_nn_imports(Anno, Rs, Imports, Records) of
+        [] ->
+            NewImports = #{Name => Mod || Name <- Rs},
+            RecImports = maps:merge(Imports, NewImports),
+            St#lint{rec_imports = RecImports};
+        Es ->
+            foldl(fun({_Mod,_Name}=ModName, S0) ->
+                          Error = {redefine_imported_record, ModName},
+                          add_error(Anno, Error, S0);
+                     (Name, S0) when is_atom(Name) ->
+                          Error = {redefine_local_record, Name},
+                          add_error(Anno, Error, S0)
+                  end, St, Es)
+    end.
+
+check_nn_imports(_Anno, Rs, Is, Records) ->
+    foldl(fun (Name, Efs) ->
+                  case is_map_key(Name, Records) of
+                      true ->
+                          [Name|Efs];
+                      false ->
+                          case Is of
+                              #{Name := Mod} -> [{Mod,Name}|Efs];
+                              #{} -> Efs
+                          end
+                  end
+          end, [], Rs).
+
 -spec imported(atom(), arity(), lint_state()) -> {'yes',module()} | 'no'.
 
 imported(F, A, St) ->
@@ -1905,9 +2197,8 @@ imported(F, A, St) ->
         error -> no
     end.
 
+%% Check an on_load directive and remember it.
 -spec on_load(erl_anno:anno(), fa(), lint_state()) -> lint_state().
-%%  Check an on_load directive and remember it.
-
 on_load(Anno, {Name,Arity}=Fa, #lint{on_load=OnLoad0}=St0)
   when is_atom(Name), is_integer(Arity) ->
     %% Always add the function name (even if there is a problem),
@@ -1929,6 +2220,7 @@ on_load(Anno, Val, St) ->
     %% Bad syntax.
     add_error(Anno, {bad_on_load,Val}, St).
 
+-spec check_on_load(lint_state()) -> lint_state().
 check_on_load(#lint{defined=Defined,on_load=[{_,0}=Fa],
 		    on_load_anno=Anno}=St) ->
     case gb_sets:is_member(Fa, Defined) of
@@ -2068,21 +2360,44 @@ pattern({map,_Anno,Ps}, Vt, Old, St) ->
 pattern({record_index,Anno,Name,Field}, _Vt, _Old, St) ->
     {Vt1,St1} =
         check_record(Anno, Name, St,
-                     fun (Dfs, St1) ->
-                             pattern_field(Field, Name, Dfs, St1)
+                     fun (tuple, Dfs, St1) ->
+                             pattern_field(Field, Name, Dfs, St1);
+                         (native, _Dfs, St1) ->
+                             {atom, _, F} = Field,
+                             Error = {native_record_illegal_record_index,
+                                      Name,F},
+                             {[], add_error(Anno, Error, St1)}
                      end),
     {Vt1,[],St1};
-pattern({record,Anno,Name,Pfs}, Vt, Old, St) ->
-    case maps:find(Name, St#lint.records) of
-        {ok,{_Anno,Fields}} ->
-            St1 = used_record(Name, St),
-            St2 = check_multi_field_init(Pfs, Anno, Fields, St1),
-            pattern_fields(Pfs, Name, Fields, Vt, Old, St2);
-        error ->
-            DefRecords = [atom_to_list(R) || R <- maps:keys(St#lint.records)],
-            case most_possible_string(Name, DefRecords) of
-                [] -> {[],[],add_error(Anno, {undefined_record,Name}, St)};
-                GuessF -> {[],[],add_error(Anno, {undefined_record,Name,GuessF}, St)}
+pattern({record, Anno, {Mod, Name}=ModName, Pfs}, Vt, Old, St) ->
+    if
+        Mod =:= St#lint.module ->
+            pattern({record, Anno, Name, Pfs}, Vt, Old, St);
+        true ->
+            pattern_native_record_fields(ModName, Pfs, Vt, Old, St)
+    end;
+pattern({record, _Anno, [], Fs}, Vt, Old, St) ->
+    pattern_native_record_fields([], Fs, Vt, Old, St);
+pattern({record,Anno,Name,Pfs}, Vt, Old, St0) ->
+    IsNative = case St0#lint.records of
+                   #{Name := {_, native, _}} ->
+                       true;
+                   #{} ->
+                       is_map_key(Name, St0#lint.rec_imports)
+               end,
+    case IsNative of
+        true ->
+            St1 = used_record(Name, St0),
+            St2 = check_native_record_fields_usage(Name, Pfs, St1),
+            pattern_native_record_fields(Name, Pfs, Vt, Old, St2);
+        false ->
+            case maps:find(Name, St0#lint.records) of
+                {ok,{_Anno,_Flavor,Fields}} ->
+                    St1 = used_record(Name, St0),
+                    St2 = check_multi_field_init(Pfs, Anno, Fields, St1),
+                    pattern_fields(Pfs, Name, Fields, Vt, Old, St2);
+                error ->
+                    {[],[],suggest_record_name(Anno, undefined_record, Name, St0)}
             end
     end;
 pattern({bin,_,Fs}, Vt, Old, St) ->
@@ -2095,12 +2410,16 @@ pattern({op,_Anno,'++',{cons,Ai,{integer,_A2,_I},T},R}, Vt, Old, St) ->
     pattern({op,Ai,'++',T,R}, Vt, Old, St);    %Weird, but compatible!
 pattern({op,_Anno,'++',{string,_Ai,_S},R}, Vt, Old, St) ->
     pattern(R, Vt, Old, St);                   %String unimportant here
-pattern({match,_Anno,Pat1,Pat2}, Vt0, Old, St0) ->
+pattern({match,Anno,Pat1,Pat2}, Vt0, Old, St0) ->
     {Lvt, Lnew, St1} = pattern(Pat1, Vt0, Old, St0),
     {Rvt, Rnew, St2} = pattern(Pat2, Vt0, Old, St1),
     {Vt1, St3} = vtmerge_pat(Lvt, Rvt, St2),
     {New, St4} = vtmerge_pat(Lnew, Rnew, St3),
-    {Vt1, New, St4};
+    St5 = case only_vars(Pat1) orelse only_vars(Pat2) of
+              true -> St4;
+              false -> maybe_add_warning(Anno, match_alias_pats, St4)
+          end,
+    {Vt1, New, St5};
 %% Catch legal constant expressions, including unary +,-.
 pattern(Pat, _Vt, _Old, St) ->
     case is_pattern_expr(Pat) of
@@ -2115,6 +2434,14 @@ pattern_list(Ps, Vt0, Old, St) ->
                   {New, St3} = vtmerge_pat(Psnew, Pnew, St2),
                   {Vt1, New, St3}
           end, {[],[],St}, Ps).
+
+only_vars({var,_,_}) ->
+    true;
+only_vars({match,_,P1,P2}) ->
+    only_vars(P1) andalso only_vars(P2);
+only_vars(_) ->
+    false.
+
 
 %% Check for '_' initializing no fields.
 check_multi_field_init(Fs, Anno, Fields, St) ->
@@ -2331,7 +2658,7 @@ bit_type(Anno, Size0, Type, St) ->
 
 bit_size_check(_Anno, unknown, _, St) -> {unknown,St};
 bit_size_check(_Anno, undefined, #bittype{type=Type}, St) ->
-    true = (Type =:= utf8) or (Type =:= utf16) or (Type =:= utf32), %Assertion.
+    true = Type =:= utf8 orelse Type =:= utf16 orelse Type =:= utf32, %Assertion.
     {undefined,St};
 bit_size_check(Anno, all, #bittype{type=Type}, St) ->
     case Type of
@@ -2427,32 +2754,41 @@ gexpr({map,_Anno,Src,Es}, Vt, St) ->
     {vtmerge(Svt, Fvt),St2};
 gexpr({record_index,Anno,Name,Field}, _Vt, St) ->
     check_record(Anno, Name, St,
-                 fun (Dfs, St1) -> record_field(Field, Name, Dfs, St1) end );
+                 fun (tuple=Flavor, Dfs, St1) ->
+                         record_field(Field, Flavor, Name, Dfs, St1);
+                     (native, _Dfs, St1) ->
+                         {atom, _, F} = Field,
+                         Error = {native_record_illegal_record_index,
+                                  Name,F},
+                         {[], add_error(Anno, Error, St1)}
+                 end);
 gexpr({record_field,Anno,Rec,Name,Field}, Vt, St0) ->
     {Rvt,St1} = gexpr(Rec, Vt, St0),
     {Fvt,St2} = check_record(Anno, Name, St1,
-                             fun (Dfs, St) ->
-                                     record_field(Field, Name, Dfs, St)
+                             fun (Flavor, Dfs, St) ->
+                                     record_field(Field, Flavor, Name, Dfs, St)
                              end),
     {vtmerge(Rvt, Fvt),St2};
 gexpr({record,Anno,Name,Inits}, Vt, St) ->
     check_record(Anno, Name, St,
-                 fun (Dfs, St1) ->
-                         ginit_fields(Inits, Anno, Name, Dfs, Vt, St1)
+                 fun (tuple, Dfs, St1) ->
+                         ginit_fields(Inits, Anno, Name, Dfs, Vt, St1);
+                     (native, _Dfs, St1) ->
+                         {[], add_error(Anno, native_record_in_guard, St1)}
                  end);
 gexpr({bin,_Anno,Fs}, Vt,St) ->
     expr_bin(Fs, Vt, St, fun gexpr/3);
 gexpr({call,_Anno,{atom,_Ar,is_record},[E,{atom,An,Name}]}, Vt, St0) ->
     {Rvt,St1} = gexpr(E, Vt, St0),
-    {Rvt,exist_record(An, Name, St1)};
+    {Rvt,exist_any_record(An, Name, St1)};
 gexpr({call,Anno,{atom,_Ar,is_record},[E,R]}, Vt, St0) ->
     {Asvt,St1} = gexpr_list([E,R], Vt, St0),
     {Asvt,add_error(Anno, illegal_guard_expr, St1)};
 gexpr({call,Anno,{remote,_Ar,{atom,_Am,erlang},{atom,Af,is_record}},[E,A]},
       Vt, St0) ->
     gexpr({call,Anno,{atom,Af,is_record},[E,A]}, Vt, St0);
-gexpr({call,Anno,{atom,_Ar,is_record},[E0,{atom,_,_Name},{integer,_,_}]},
-      Vt, St0) ->
+gexpr({call,Anno,{atom,_Ar,is_record},[E0,{atom,_,_Name},{Type,_,_}]},
+      Vt, St0) when Type =:= integer; Type =:= atom ->
     {E,St1} = gexpr(E0, Vt, St0),
     case no_guard_bif_clash(St0, {is_record,3}) of
 	true ->
@@ -2507,13 +2843,22 @@ gexpr({op,_Anno,EqOp,L,R}, Vt, St0) when EqOp =:= '=:='; EqOp =:= '=/=' ->
 gexpr({op,Anno,Op,L,R}, Vt, St0) ->
     {Avt,St1} = gexpr_list([L,R], Vt, St0),
     case is_gexpr_op(Op, 2) of
-        true -> {Avt,St1};
+        true -> {Avt,warn_obsolete_op(Op, 2, Anno, St1)};
         false -> {Avt,add_error(Anno, illegal_guard_expr, St1)}
     end;
 %% Everything else is illegal! You could put explicit tests here to
 %% better error diagnostics.
 gexpr(E, _Vt, St) ->
     {[],add_error(element(2, E), illegal_guard_expr, St)}.
+
+warn_obsolete_op(Op, A, Anno, St) ->
+    case {Op, A} of
+        {'and', 2} ->
+	    maybe_add_warning(Anno, {obsolete_bool_op, "'and'", "'andalso'"}, St);
+        {'or', 2} ->
+	    maybe_add_warning(Anno, {obsolete_bool_op, "'or'", "'orelse'"}, St);
+        _ -> St
+    end.
 
 %% gexpr_list(Expressions, VarTable, State) ->
 %%      {UsedVarTable,State'}
@@ -2634,7 +2979,7 @@ is_gexpr({record,A,Name,Inits}, Info0) ->
     is_gexpr_fields(Inits, A, Name, Info);
 is_gexpr({bin,_A,Fs}, Info) ->
     all(fun ({bin_element,_Anno,E,Sz,_Ts}) ->
-                is_gexpr(E, Info) and (Sz =:= default orelse is_gexpr(Sz, Info))
+                is_gexpr(E, Info) andalso (Sz =:= default orelse is_gexpr(Sz, Info))
         end, Fs);
 is_gexpr({call,_A,{atom,_Af,F},As}, {_,IsOverridden}=Info) ->
     A = length(As),
@@ -2678,7 +3023,11 @@ is_map_fields(_T, _Info) -> false.
 
 is_gexpr_fields(Fs, A, Name, {RDs,_}=Info) ->
     IFs = case maps:find(Name, RDs) of
-              {ok,{_Anno,Fields}} -> Fs ++ init_fields(Fs, A, Fields);
+              {ok,{_Anno,_Flavor,Fields}} ->
+                  Fs ++ init_fields(Fs, A, Fields);
+              {ok,{_Anno,Fields}} ->
+                  %% Called from is_guard_test/3.
+                  Fs ++ init_fields(Fs, A, Fields);
               error  -> Fs
           end,
     all(fun ({record_field,_Af,_Name,V}) -> is_gexpr(V, Info);
@@ -2709,52 +3058,76 @@ expr({atom,Anno,A}, _Vt, St) ->
     {[],keyword_warning(Anno, A, St)};
 expr({string,_Anno,_S}, _Vt, St) -> {[],St};
 expr({nil,_Anno}, _Vt, St) -> {[],St};
-expr({cons,_Anno,H,T}, Vt, St) ->
-    expr_list([H,T], Vt, St);
+expr({cons,Anno,H,T}, Vt, St) ->
+    vtupd_export_expr_list({list, Anno}, [H, T], Vt, St);
 expr({lc,_Anno,E,Qs}, Vt, St) ->
     handle_comprehension(E, Qs, Vt, St);
 expr({bc,_Anno,E,Qs}, Vt, St) ->
     handle_comprehension(E, Qs, Vt, St);
 expr({mc,_Anno,E,Qs}, Vt, St) ->
     handle_comprehension(E, Qs, Vt, St);
-expr({tuple,_Anno,Es}, Vt, St) ->
-    expr_list(Es, Vt, St);
-expr({map,_Anno,Es}, Vt, St) ->
-    map_fields(Es, Vt, check_assoc_fields(Es, St), fun expr_list/3);
+expr({tuple,Anno,Es}, Vt, St) ->
+    vtupd_export_expr_list({tuple, Anno}, Es, Vt, St);
+expr({map,Anno,Es}, Vt, St) ->
+    map_fields(Es, Vt, check_assoc_fields(Es, St),
+               fun(Es0, Vt0, St0) ->
+                       vtupd_export_expr_list({map, Anno}, Es0, Vt0, St0)
+               end);
 expr({map,Anno,Src,Es}, Vt, St) ->
-    {Svt,St1} = expr(Src, Vt, St),
-    {Fvt,St2} = map_fields(Es, Vt, St1, fun expr_list/3),
+    {Svt,St1} = vtupd_export_expr_list({map, Anno}, [Src], Vt, St),
+    {Fvt,St2} = map_fields(Es, Vt, St1,
+                           fun(Es0, Vt0, St0) ->
+                                   vtupd_export_expr_list({map, Anno}, Es0, Vt0, St0)
+                           end),
     {vtupdate(Svt, Fvt), warn_if_literal_update(Anno, Src, St2)};
 expr({record_index,Anno,Name,Field}, _Vt, St) ->
     check_record(Anno, Name, St,
-                 fun (Dfs, St1) -> record_field(Field, Name, Dfs, St1) end);
+                 fun (tuple=Flavor, Dfs, St1) ->
+                         record_field(Field, Flavor, Name, Dfs, St1);
+                     (native, _Dfs, St1) ->
+                         {atom, _, F} = Field,
+                         Error = {native_record_illegal_record_index,
+                                  Name,F},
+                         {[], add_error(Anno, Error, St1)}
+                 end);
+expr({record, Anno, [], _Inits}, _Vt, St) ->
+    {[], add_error(Anno, {undefined_native_record, '_'}, St)};
 expr({record,Anno,Name,Inits}, Vt, St) ->
     check_record(Anno, Name, St,
-                 fun (Dfs, St1) ->
-                         init_fields(Inits, Anno, Name, Dfs, Vt, St1)
+                 fun (Flavor, Dfs, St1) ->
+                         init_fields(Flavor, Inits, Anno, Name, Dfs, Vt, St1)
                  end);
 expr({record_field,Anno,Rec,Name,Field}, Vt, St0) ->
     {Rvt,St1} = record_expr(Anno, Rec, Vt, St0),
     {Fvt,St2} = check_record(Anno, Name, St1,
-                             fun (Dfs, St) ->
-                                     record_field(Field, Name, Dfs, St)
+                             fun (Flavor, Dfs, St) ->
+                                     record_field(Field, Flavor, Name, Dfs, St)
                              end),
     {vtmerge(Rvt, Fvt),St2};
 expr({record,Anno,Rec,Name,Upds}, Vt, St0) ->
     {Rvt,St1} = record_expr(Anno, Rec, Vt, St0),
     {Usvt,St2} = check_record(Anno, Name, St1,
-                          fun (Dfs, St) ->
-                                  update_fields(Upds, Name, Dfs, Vt, St)
-                          end ),
-    case has_wildcard_field(Upds) of
-        no -> {vtmerge(Rvt, Usvt), warn_if_literal_update(Anno, Rec, St2)};
-        WildAnno -> {[],add_error(WildAnno, {wildcard_in_update,Name}, St2)}
+                              fun (Flavor, Dfs, St) ->
+                                      update_fields(Upds, Flavor, Name, Dfs, Vt, St)
+                              end ),
+    case St2#lint.records of
+        #{Name := {_,tuple,_}} ->
+            case has_wildcard_field(Upds) of
+                no ->
+                    {vtmerge(Rvt, Usvt), warn_if_literal_update(Anno, Rec, St2)};
+                WildAnno ->
+                    {[],add_error(WildAnno, {wildcard_in_update,Name}, St2)}
+            end;
+        #{} ->
+            {vtmerge(Rvt, Usvt), warn_if_literal_update(Anno, Rec, St2)}
     end;
-expr({bin,_Anno,Fs}, Vt, St) ->
-    expr_bin(Fs, Vt, St, fun expr/3);
-expr({block,_Anno,Es}, Vt, St) ->
+expr({bin,Anno,Fs}, Vt, St) ->
+    {Vt1, St1} = expr_bin(Fs, Vt, St, fun expr/3),
+    {vtupd_export({binary, Anno}, Vt1, Vt), St1};
+expr({block,Anno,Es}, Vt, St) ->
     %% Unfold block into a sequence.
-    exprs(Es, Vt, St);
+    {Vt1, St1} = exprs(Es, Vt, St),
+    {vtupd_export({'begin', Anno}, Vt1, Vt), St1};
 expr({'if',Anno,Cs}, Vt, St) ->
     icrt_clauses(Cs, {'if',Anno}, Vt, St);
 expr({'case',Anno,E,Cs}, Vt, St0) ->
@@ -2815,7 +3188,7 @@ expr({named_fun,Anno,Name,Cs}, Vt, St0) ->
     {vtold(Csvt, Vt),St3};
 expr({call,_Anno,{atom,_Ar,is_record},[E,{atom,An,Name}]}, Vt, St0) ->
     {Rvt,St1} = expr(E, Vt, St0),
-    {Rvt,exist_record(An, Name, St1)};
+    {Rvt,exist_any_record(An, Name, St1)};
 expr({call,Anno,{remote,_Ar,{atom,_Am,erlang},{atom,Af,is_record}},[E,A]},
       Vt, St0) ->
     expr({call,Anno,{atom,Af,is_record},[E,A]}, Vt, St0);
@@ -2826,7 +3199,7 @@ expr({call,Anno,{remote,_Ar,{atom,_Am,M},{atom,Af,F}},As}, Vt, St0) ->
     St2 = check_remote_function(Anno, M, F, As, St1),
     St3 = check_module_name(M, Anno, St2),
     St4 = check_remote_self_call(Anno, M, F, length(As), St3),
-    expr_list(As, Vt, St4);
+    vtupd_export_expr_list({call, Anno}, As, Vt, St4);
 expr({call,Anno,{remote,_Ar,M,F},As}, Vt, St0) ->
     St1 = keyword_warning(Anno, M, St0),
     St2 = keyword_warning(Anno, F, St1),
@@ -2836,14 +3209,14 @@ expr({call,Anno,{remote,_Ar,M,F},As}, Vt, St0) ->
               _ ->
                   St2
           end,
-    expr_list([M,F|As], Vt, St3);
+    vtupd_export_expr_list({call, Anno}, [M, F | As], Vt, St3);
 expr({call,Anno,{atom,Aa,F},As}, Vt, St0) ->
     St1 = keyword_warning(Aa, F, St0),
-    {Asvt,St2} = expr_list(As, Vt, St1),
+    {Asvt,St2} = vtupd_export_expr_list({call, Anno}, As, Vt, St1),
     {Asvt, check_call(Anno, F, As, Aa, St2)};
 expr({call,Anno,F,As}, Vt, St0) ->
     St = warn_invalid_call(Anno,F,St0),
-    expr_list([F|As], Vt, St);                  %They see the same variables
+    vtupd_export_expr_list({call, Anno}, [F | As], Vt, St); %They see the same variables
 expr({'try',Anno,Es,Scs,Ccs,As}, Vt, St0) ->
     %% The only exports we allow are from the try expressions to the
     %% success clauses.
@@ -2854,10 +3227,10 @@ expr({'try',Anno,Es,Scs,Ccs,As}, Vt, St0) ->
                              vtupdate(Evt0, Vt), Uvt, St1),
     Evt1 = vtupdate(Uvt, Evt0),
     Rvt0 = Sccs,
-    Rvt1 = vtupdate(vtunsafe(TryAnno, Rvt0, Vt), Rvt0),
+    Rvt1 = vtupd_unsafe(TryAnno, Rvt0, Vt),
     Evt2 = vtmerge(Evt1, Rvt1),
     {Avt0,St} = exprs(As, vtupdate(Evt2, Vt), St2),
-    Avt1 = vtupdate(vtunsafe(TryAnno, Avt0, Vt), Avt0),
+    Avt1 = vtupd_unsafe(TryAnno, Avt0, Vt),
     Avt = vtmerge(Evt2, Avt1),
     {Avt,St};
 expr({'catch',Anno,E}, Vt, St0) ->
@@ -2867,7 +3240,7 @@ expr({'catch',Anno,E}, Vt, St0) ->
               true -> add_warning(Anno, deprecated_catch, St);
               false -> St
           end,
-    {vtupdate(vtunsafe({'catch',Anno}, Evt, Vt), Evt),St1};
+    {vtupd_unsafe({'catch', Anno}, Evt, Vt), St1};
 expr({match,_Anno,P,E}, Vt, St0) ->
     {Evt,St1} = expr(E, Vt, St0),
     {Pvt,Pnew,St} = pattern(P, vtupdate(Evt, Vt), St1),
@@ -2890,19 +3263,20 @@ expr({'maybe',MaybeAnno,Es,{'else',ElseAnno,Cs}}, Vt, St) ->
     Cvt2 = vtmerge(Cvt0, Cvt1),
     {vtmerge(Evt2, Cvt2),St2};
 %% No comparison or boolean operators yet.
-expr({op,_Anno,_Op,A}, Vt, St) ->
-    expr(A, Vt, St);
+expr({op,Anno,Op,A}, Vt, St) ->
+    vtupd_export_expr_list({Op, Anno}, [A], Vt, St);
 expr({op,Anno,Op,L,R}, Vt, St0) when Op =:= 'orelse'; Op =:= 'andalso' ->
-    {Evt1,St1} = expr(L, Vt, St0),
+    {Evt1, St1} = vtupd_export_expr_list({Op, Anno}, [L], Vt, St0),
     Vt1 = vtupdate(Evt1, Vt),
     {Evt2,St2} = expr(R, Vt1, St1),
-    Evt3 = vtupdate(vtunsafe({Op,Anno}, Evt2, Vt1), Evt2),
+    Evt3 = vtupd_unsafe({Op, Anno}, Evt2, Vt1),
     {vtmerge(Evt1, Evt3),St2};
-expr({op,_Anno,EqOp,L,R}, Vt, St0) when EqOp =:= '=:='; EqOp =:= '=/=' ->
+expr({op,Anno,EqOp,L,R}, Vt, St0) when EqOp =:= '=:='; EqOp =:= '=/=' ->
     St = expr_check_match_zero(R, expr_check_match_zero(L, St0)),
-    expr_list([L,R], Vt, St);                   %They see the same variables
-expr({op,_Anno,_Op,L,R}, Vt, St) ->
-    expr_list([L,R], Vt, St);                   %They see the same variables
+    vtupd_export_expr_list({EqOp, Anno}, [L, R], Vt, St); %They see the same variables
+expr({op,Anno,Op,L,R}, Vt, St) ->
+    St1 = warn_obsolete_op(Op, 2, Anno, St),
+    vtupd_export_expr_list({Op, Anno}, [L, R], Vt, St1); %They see the same variables
 %% The following are not allowed to occur anywhere!
 expr({remote,_Anno,M,_F}, _Vt, St) ->
     {[],add_error(erl_parse:first_anno(M), illegal_expr, St)};
@@ -2982,6 +3356,12 @@ expr_list(Es, Vt, St0) ->
                   {Evt, St2} = expr(E, Vt, St1),
                   vtmerge_pat(Evt, Esvt, St2)
           end, {[], St0}, Es).
+
+%% as expr_list but mark new vars as exported
+
+vtupd_export_expr_list(Where, Es, Vt, St) ->
+    {Evt, St1} = expr_list(Es, Vt, St),
+    {vtupd_export(Where, Evt, Vt), St1}.
 
 record_expr(Anno, Rec, Vt, St0) ->
     St1 = warn_invalid_record(Anno, Rec, St0),
@@ -3079,26 +3459,49 @@ check_remote_self_call(_Anno, _M, _F, _A, St) ->
 %%  Add a record definition if it does not already exist. Normalise
 %%  so that all fields have explicit initial value.
 
-record_def(Anno, Name, Fs0, St0) ->
-    case is_map_key(Name, St0#lint.records) of
-        true -> add_error(Anno, {redefine_record,Name}, St0);
+record_def(Anno, Flavor, Name, Fs, St) ->
+    case is_map_key(Name, St#lint.records) of
+        true ->
+            add_error(Anno, {redefine_record,Name}, St);
         false ->
-            {Fs1,St1} = def_fields(normalise_fields(Fs0), Name, St0),
-            St2 = St1#lint{records=maps:put(Name, {Anno,Fs1},
-                                            St1#lint.records)},
-            Types = [T || {typed_record_field, _, T} <- Fs0],
-            St3 = St2#lint{type_id = {record, Name}},
-            check_type({type, nowarn(), product, Types}, St3)
+            case St#lint.rec_imports of
+                #{Name := Mod} ->
+                    add_error(Anno, {redefine_imported_record,{Mod,Name}}, St);
+                #{} ->
+                    record_def_1(Anno, Flavor, Name, Fs, St)
+            end
     end.
 
-%% def_fields([RecDef], RecordName, State) -> {[DefField],State}.
+record_def_1(Anno, Flavor, Name, Fs0, St0) ->
+    {Fs,St1} =
+        case Flavor of
+            native ->
+                Fs1 = normalise_fields(Flavor, Fs0),
+                def_fields(Fs1, Flavor, Name, St0);
+            tuple ->
+                def_fields(normalise_fields(Flavor, Fs0), Flavor, Name, St0)
+        end,
+    St2 = St1#lint{records=maps:put(Name, {Anno,Flavor,Fs},
+                                    St1#lint.records)},
+    Types = [T || {typed_record_field, _, T} <- Fs0],
+    St3 = St2#lint{type_id = {record, Name}},
+    check_type({type, nowarn(), product, Types}, St3).
+
+
+%% def_fields([RecDef], Flavor, RecordName, State) -> {[DefField],State}.
 %%  Check (normalised) fields for duplicates.  Return unduplicated
 %%  record and set State.
 
-def_fields(Fs0, Name, St0) ->
-    foldl(fun ({record_field,Af,{atom,Aa,F},V}, {Fs,St}) ->
+def_fields(Fs0, Flavor, Name, St0) ->
+    foldl(fun ({record_field,Af,{atom,Aa,F},V}=Field, {Fs,St}) ->
                   case exist_field(F, Fs) of
-                      true -> {Fs,add_error(Af, {redefine_field,Name,F}, St)};
+                      true ->
+                          {Fs,add_error(Af, {redefine_field,Name,F}, St)};
+                      false when element(1, V) =:= no_value ->
+                          {[{record_field,Af,{atom,Aa,F},V}|Fs],St};
+                      false when Flavor =:= native ->
+                          St1 = check_field_default(Name, Field, St),
+                          {[{record_field,Af,{atom,Aa,F},V}|Fs],St1};
                       false ->
                           St1 = St#lint{recdef_top = true},
                           {_,St2} = expr(V, [], St1),
@@ -3118,31 +3521,76 @@ def_fields(Fs0, Name, St0) ->
                   end
           end, {[],St0}, Fs0).
 
+%% Currently, we only allow compile-time constant expressions in native
+%% record definitions.
+check_field_default(Name, Field, St) ->
+    {record_field, Af, {atom, _Aa, F}, Init} = Field,
+    case check_field_default_1(Init) of
+        true -> St;
+        false -> add_error(Af, {illegal_native_record_default,Name,F}, St)
+    end.
+
+check_field_default_1(Init) ->
+    case erl_eval:partial_eval(Init) of
+        {integer,_,_} -> true;
+        {char,_,_} -> true;
+        {float,_,_} -> true;
+        {atom,_,_} -> true;
+        {nil,_} -> true;
+        {string,_,_} -> true;
+        {cons,_,H,T} ->
+            check_field_default_1(H) andalso check_field_default_1(T);
+        {tuple,_,E} ->
+            all(fun check_field_default_1/1, E);
+        {map,_,E} ->
+            Ks = [K || {_,_,K,_} <- E],
+            Vs = [V || {_,_,_,V} <- E],
+            all(fun check_field_default_1/1, Ks) andalso
+            all(fun check_field_default_1/1, Vs);
+        {bin,_,Segs} ->
+            all(fun check_field_default_1/1, Segs);
+        {bin_element,_,{string,_,_},_,_} ->
+            true;
+        _ -> false
+    end.
+
 %% normalise_fields([RecDef]) -> [Field].
 %%  Normalise the field definitions to always have a default value. If
 %%  none has been given then use 'undefined'.
 %%  Also, strip type information from typed record fields.
 
-normalise_fields(Fs) ->
+normalise_fields(native, Fs) ->
+    map(fun ({record_field,Af,Field}) ->
+		{record_field,Af,Field,{no_value,Af}};
+	    ({typed_record_field,{record_field,Af,Field},_Type}) ->
+		{record_field,Af,Field,{no_value,Af}};
+	    ({typed_record_field,Field,_Type}) ->
+		Field;
+            (F) -> F
+        end, Fs);
+normalise_fields(tuple, Fs) ->
     map(fun ({record_field,Af,Field}) ->
 		{record_field,Af,Field,{atom,Af,undefined}};
 	    ({typed_record_field,{record_field,Af,Field},_Type}) ->
 		{record_field,Af,Field,{atom,Af,undefined}};
 	    ({typed_record_field,Field,_Type}) ->
 		Field;
-            (F) -> F end, Fs).
+            (F) -> F
+        end, Fs).
 
-%% exist_record(Anno, RecordName, State) -> State.
-%%  Check if a record exists.  Set State.
+%% exist_any_record(Anno, RecordName, State) -> State.
+%%  Check if RecordName is either a tuple record or a native record.  Set State.
 
-exist_record(Anno, Name, St) ->
+exist_any_record(Anno, Name, St) ->
     case is_map_key(Name, St#lint.records) of
-        true -> used_record(Name, St);
+        true ->
+            used_record(Name, St);
         false ->
-            RecordNames = [atom_to_list(R) || R <- maps:keys(St#lint.records)],
-            case most_possible_string(Name, RecordNames) of
-                [] -> add_error(Anno, {undefined_record,Name}, St);
-                GuessF -> add_error(Anno, {undefined_record,Name,GuessF}, St)
+            case is_map_key(Name, St#lint.rec_imports) of
+                true ->
+                    St;
+                false ->
+                    suggest_record_name(Anno, undefined_record, Name, St)
             end
     end.
 
@@ -3157,16 +3605,55 @@ exist_record(Anno, Name, St) ->
 %%  and must return
 %%      {UpdatedVarTable,State}
 
-check_record(Anno, Name, St, CheckFun) ->
+check_record(_Anno, [], St, CheckFun) ->
+    CheckFun(native, unknown, St);
+check_record(Anno, {Mod, Name}, St, CheckFun) ->
+    if
+        Mod =:= St#lint.module ->
+            case St#lint.records of
+                #{Name := {_, Flavor, Fields}} ->
+                    native = Flavor,            %Assertion.
+                    CheckFun(Flavor, Fields, used_record(Name, St));
+                #{} ->
+                    {[],suggest_record_name(Anno, undefined_record, Name, St)}
+            end;
+        true ->
+            CheckFun(native, unknown, used_record(Name, St))
+    end;
+check_record(Anno, Name, St, CheckFun) when is_atom(Name) ->
     case maps:find(Name, St#lint.records) of
-        {ok,{_Anno,Fields}} -> CheckFun(Fields, used_record(Name, St));
+        {ok,{_Anno,Flavor,Fields}} ->
+            CheckFun(Flavor, Fields, used_record(Name, St));
         error ->
-            RecordNames = [atom_to_list(R) || R <- maps:keys(St#lint.records)],
-            case most_possible_string(Name, RecordNames) of
-                [] -> {[],add_error(Anno, {undefined_record,Name}, St)};
-                GuessF -> {[],add_error(Anno, {undefined_record,Name,GuessF}, St)}
+            case is_map_key(Name, St#lint.rec_imports) of
+                true ->
+                    CheckFun(native, unknown, used_record(Name, St));
+                false ->
+                    {[],suggest_record_name(Anno, undefined_record, Name, St)}
             end
     end.
+
+suggest_record_name(Anno, Error, Name, St) ->
+    RecordNames = [atom_to_list(R) ||
+                      R <- maps:keys(St#lint.records)] ++
+        [atom_to_list(R) || R := _Mod <- St#lint.rec_imports],
+    case most_possible_string(Name, RecordNames) of
+        [] ->
+            add_error(Anno, {Error,Name}, St);
+        GuessF ->
+            add_error(Anno, {Error,Name,GuessF}, St)
+    end.
+
+suggest_field_name(Anno, Error, Name, F, Fields, St) ->
+    FieldNames = [atom_to_list(R) ||
+                     {record_field, _L, {_, _, R}, _} <:- Fields],
+    Reason = case most_possible_string(F, FieldNames) of
+                 [] ->
+                     {Error,Name,F};
+                 GuessF ->
+                     {Error,Name,F,GuessF}
+             end,
+    add_error(Anno, Reason, St).
 
 used_record(Name, #lint{usage=Usage}=St) ->
     UsedRecs = gb_sets:add_element(Name, Usage#usage.used_records),
@@ -3177,41 +3664,71 @@ used_record(Name, #lint{usage=Usage}=St) ->
 %% check_fields([ChkField], RecordName, [RecDefField], VarTable, State, CheckFun) ->
 %%      {UpdVarTable,State}.
 
-check_fields(Fs, Name, Fields, Vt0, St0, CheckFun) ->
+check_fields(Fs, Flavor, Name, Fields, Vt0, St0, CheckFun, DiagFlavor) ->
     {_SeenFields,Uvt,St1} =
-        foldl(fun (Field, {Sfsa,Vta,Sta}) ->
-                      {Sfsb,{Vtb,Stb}} = check_field(Field, Name, Fields,
-                                                     Vt0, Sta, Sfsa, CheckFun),
+        foldl(fun (Field, {Rfsa,Vta,Sta}) ->
+                      {Rfsb,{Vtb,Stb}} = check_field(Field, Flavor, Name, Fields,
+                                                     Vt0, Sta, Rfsa, CheckFun,
+                                                     DiagFlavor),
                       {Vt1, St1} = vtmerge_pat(Vta, Vtb, Stb),
-                      {Sfsb, Vt1, St1}
+                      {Rfsb, Vt1, St1}
               end, {[],[], St0}, Fs),
     {Uvt,St1}.
 
-check_field({record_field,Af,{atom,Aa,F},Val}, Name, Fields,
-            Vt, St, Sfs, CheckFun) ->
-    case member(F, Sfs) of
-        true -> {Sfs,{[],add_error(Af, {redefine_field,Name,F}, St)}};
+check_field({record_field,_Af,_F,Val}, native, _Name, unknown,
+            Vt, St0, Rfs, CheckFun, _DiagFlavor) ->
+    {Rfs, CheckFun(Val, Vt, St0)};
+check_field({record_field,Af,{atom,Aa,F},Val}, Flavor, Name, Fields,
+            Vt, St0, Rfs, CheckFun, DiagFlavor) ->
+    case member(F, Rfs) of
+        true ->
+            {Rfs,{[],add_error(Af, {redefine_field,Name,F}, St0)}};
         false ->
-            {[F|Sfs],
-             case find_field(F, Fields) of
-                 {ok,_I} -> CheckFun(Val, Vt, St);
-                 error ->
-                     FieldNames = [atom_to_list(R) || {record_field, _L, {_, _, R}, _} <- Fields],
-                     case most_possible_string(F, FieldNames) of
-                         [] -> {[],add_error(Aa, {undefined_field,Name,F}, St)};
-                         GuessF -> {[],add_error(Aa, {undefined_field,Name,F,GuessF}, St)}
-                     end
-             end}
+            check_existing_field(Aa, F, Val, Flavor, Name, Fields, Vt, St0,
+                                 Rfs, CheckFun, DiagFlavor)
     end;
-check_field({record_field,_Af,{var,Aa,'_'=F},Val}, _Name, _Fields,
-            Vt, St, Sfs, CheckFun) ->
-    case member(F, Sfs) of
-        true -> {Sfs,{[],add_error(Aa, bad_multi_field_init, St)}};
-        false -> {[F|Sfs],CheckFun(Val, Vt, St)}
+check_field({record_field,_Af,{var,Aa,'_'=F},Val}, tuple, _Name, _Fields,
+            Vt, St, Rfs, CheckFun, _DiagFlavor) ->
+    %% Multi-field init for tuple records.
+    case member(F, Rfs) of
+        true -> {Rfs,{[],add_error(Aa, bad_multi_field_init, St)}};
+        false -> {[F|Rfs],CheckFun(Val, Vt, St)}
     end;
-check_field({record_field,_Af,{var,Aa,V},_Val}, Name, _Fields,
-            Vt, St, Sfs, _CheckFun) ->
-    {Sfs,{Vt,add_error(Aa, {field_name_is_variable,Name,V}, St)}}.
+check_field({record_field,_Af,{var,Aa,'_'},_Val}, native, _Name, _Fields,
+            _Vt, St, Rfs, _CheckFun, _DiagFlavor) ->
+    {Rfs,{[],add_error(Aa, native_record_illegal_multi_field_init, St)}};
+check_field({record_field,_Af,{var,Aa,V},_Val}, _Flavor, Name, _Fields,
+            Vt, St, Rfs, _CheckFun, _DiagFlavor) ->
+    {Rfs,{Vt,add_error(Aa, {field_name_is_variable,Name,V}, St)}}.
+
+check_existing_field(Aa, F, Val, Flavor, Name, Fields, Vt, St0,
+                     Rfs, CheckFun, DiagFlavor) ->
+    {[F|Rfs],
+     case find_field(F, Fields) of
+         {ok,_} ->
+             case Flavor of
+                 native ->
+                     case Val of
+                         {no_value,Anno} ->
+                             W = {novalue, Name, F},
+                             case DiagFlavor of
+                                 error ->
+                                     {[], add_error(Anno, W, St0)};
+                                 warning ->
+                                     {[], maybe_add_warning(Anno, W, St0)}
+                             end;
+                         _ ->
+                             CheckFun(Val, Vt, St0)
+                     end;
+                 tuple ->
+                     CheckFun(Val, Vt, St0)
+             end;
+         error when Flavor =:= native, DiagFlavor =:= warning ->
+             {[],maybe_add_warning(Aa, {undefined_field,Name,F}, St0)};
+         error ->
+             E = undefined_field,
+             {[], suggest_field_name(Aa, E, Name, F, Fields, St0)}
+     end}.
 
 %% pattern_field(Field, RecordName, [RecDefField], State) ->
 %%      {UpdVarTable,State}.
@@ -3219,13 +3736,11 @@ check_field({record_field,_Af,{var,Aa,V},_Val}, Name, _Fields,
 
 pattern_field({atom,Aa,F}, Name, Fields, St) ->
     case find_field(F, Fields) of
-        {ok,_I} -> {[],St};
+        {ok,_I} ->
+            {[],St};
         error ->
-            FieldNames = [atom_to_list(R) || {record_field, _L, {_, _, R}, _} <- Fields],
-            case most_possible_string(F, FieldNames) of
-                [] -> {[],add_error(Aa, {undefined_field,Name,F}, St)};
-                GuessF -> {[],add_error(Aa, {undefined_field,Name,F,GuessF}, St)}
-            end
+            E = undefined_field,
+            {[],suggest_field_name(Aa, E, Name, F, Fields, St)}
     end.
 
 %% pattern_fields([PatField],RecordName,[RecDefField],
@@ -3235,16 +3750,16 @@ pattern_field({atom,Aa,F}, Name, Fields, St) ->
 pattern_fields(Fs, Name, Fields, Vt0, Old, St0) ->
     CheckFun = fun (Val, Vt, St) -> pattern(Val, Vt, Old, St) end,
     {_SeenFields,Uvt,Unew,St1} =
-        foldl(fun (Field, {Sfsa,Vta,Newa,Sta}) ->
-                      case check_field(Field, Name, Fields,
-                                       Vt0, Sta, Sfsa, CheckFun) of
-                          {Sfsb,{Vtb,Stb}} ->
+        foldl(fun (Field, {Rfsa,Vta,Newa,Sta}) ->
+                      case check_field(Field, tuple, Name, Fields,
+                                       Vt0, Sta, Rfsa, CheckFun, false) of
+                          {Rfsb,{Vtb,Stb}} ->
                               {Vt, St1} = vtmerge_pat(Vta, Vtb, Stb),
-                              {Sfsb, Vt, [], St1};
-                          {Sfsb,{Vtb,Newb,Stb}} ->
+                              {Rfsb, Vt, [], St1};
+                          {Rfsb,{Vtb,Newb,Stb}} ->
                               {Vt, Mst0} = vtmerge_pat(Vta, Vtb, Stb),
                               {New, Mst} = vtmerge_pat(Newa, Newb, Mst0),
-                              {Sfsb, Vt, New, Mst}
+                              {Rfsb, Vt, New, Mst}
                       end
               end, {[],[],[],St0}, Fs),
     {Uvt,Unew,St1}.
@@ -3253,15 +3768,15 @@ pattern_fields(Fs, Name, Fields, Vt0, Old, St0) ->
 %%      {UpdVarTable,State}.
 %%  Test if record RecordName has field Field. Set State.
 
-record_field({atom,Aa,F}, Name, Fields, St) ->
+record_field(_F, native, _Name, unknown, St) ->
+    {[],St};
+record_field({atom,Anno,F}, Flavor, Name, Fields, St) ->
     case find_field(F, Fields) of
         {ok,_I} -> {[],St};
+        error when Flavor =:= native ->
+            {[],maybe_add_warning(Anno, {undefined_field,Name,F}, St)};
         error ->
-            FieldNames = [atom_to_list(R) || {record_field, _L, {_, _, R}, _} <- Fields],
-            case most_possible_string(F, FieldNames) of
-                [] -> {[],add_error(Aa, {undefined_field,Name,F}, St)};
-                GuessF -> {[],add_error(Aa, {undefined_field,Name,F,GuessF}, St)}
-            end
+            {[],suggest_field_name(Anno, undefined_field, Name, F, Fields, St)}
     end.
 
 %% init_fields([InitField], InitAnno, RecordName, [DefField], VarTable, State) ->
@@ -3276,17 +3791,42 @@ record_field({atom,Aa,F}, Name, Fields, St) ->
 %%  record definitions were checked. Usage of records, imports, and
 %%  functions is collected.
 
-init_fields(Ifs, Anno, Name, Dfs, Vt0, St0) ->
-    {Vt1,St1} = check_fields(Ifs, Name, Dfs, Vt0, St0, fun expr/3),
-    Defs = init_fields(Ifs, Anno, Dfs),
-    {_,St2} = check_fields(Defs, Name, Dfs, Vt1, St1, fun expr/3),
-    {Vt1,St1#lint{usage = St2#lint.usage}}.
+init_fields(native, Ifs, _Anno, Name, unknown, Vt0, St0) ->
+    check_nn_fields(Name, Ifs, Vt0, St0);
+init_fields(Flavor, Ifs, Anno, Name, Dfs, Vt0, St0)
+  when Flavor =:= tuple; Flavor =:= native ->
+    DiagFlavor = case Name of
+                     {_, _} -> warning;
+                     _ -> error
+                 end,
+    {Vt1,St1} = check_fields(Ifs, Flavor, Name, Dfs, Vt0, St0,
+                             fun expr/3, DiagFlavor),
+    if
+        Flavor =:= native, St0#lint.errors =/= St1#lint.errors ->
+            %% Don't check for more errors and warnings.
+            {Vt1,St1};
+        true ->
+            Defs = init_fields(Ifs, Anno, Dfs),
+            {_,St2} = check_fields(Defs, Flavor, Name, Dfs, Vt1, St1,
+                                   fun expr/3, DiagFlavor),
+            case Flavor of
+                native ->
+                    {Vt1,St1#lint{usage = St2#lint.usage,
+                                  errors=St2#lint.errors,
+                                  warnings=St2#lint.warnings}};
+                tuple ->
+                    {Vt1,St1#lint{usage = St2#lint.usage}}
+            end
+    end.
 
 ginit_fields(Ifs, Anno, Name, Dfs, Vt0, St0) ->
-    {Vt1,St1} = check_fields(Ifs, Name, Dfs, Vt0, St0, fun gexpr/3),
+    Flavor = tuple,
+    {Vt1,St1} = check_fields(Ifs, Flavor, Name, Dfs, Vt0, St0,
+                             fun gexpr/3, error),
     Defs = init_fields(Ifs, Anno, Dfs),
     St2 = St1#lint{errors = []},
-    {_,St3} = check_fields(Defs, Name, Dfs, Vt1, St2, fun gexpr/3),
+    {_,St3} = check_fields(Defs, Flavor, Name, Dfs, Vt1, St2,
+                           fun gexpr/3, error),
     #lint{usage = Usage, errors = IllErrors} = St3,
     St4 = St1#lint{usage = Usage, errors = IllErrors ++ St1#lint.errors},
     {Vt1,St4}.
@@ -3300,8 +3840,8 @@ init_fields(Ifs, Anno, Dfs) ->
 %% update_fields(UpdFields, RecordName, RecDefFields, VarTable, State) ->
 %%      {UpdVarTable,State}
 
-update_fields(Ufs, Name, Dfs, Vt, St) ->
-    check_fields(Ufs, Name, Dfs, Vt, St, fun expr/3).
+update_fields(Ufs, Flavor, Name, Dfs, Vt, St) ->
+    check_fields(Ufs, Flavor, Name, Dfs, Vt, St, fun expr/3, warning).
 
 %% exist_field(FieldName, [Field]) -> boolean().
 %%  Find a record field in a field list.
@@ -3310,12 +3850,76 @@ exist_field(F, [{record_field,_Af,{atom,_Aa,F},_Val}|_Fs]) -> true;
 exist_field(F, [_|Fs]) -> exist_field(F, Fs);
 exist_field(_F, []) -> false.
 
+-spec exist_native_record_field(atom(), [erl_parse:af_field_decl()]) -> boolean().
+exist_native_record_field(F, [{record_field,_Af,{atom,_Aa,F},_Val}|_Fs]) -> true;
+exist_native_record_field(F, [{record_field,_Af,{atom,_Aa,F}}|_Fs]) -> true;
+exist_native_record_field(F, [_|Fs]) -> exist_native_record_field(F, Fs);
+exist_native_record_field(_F, []) -> false.
+
 %% find_field(FieldName, [Field]) -> {ok,Val} | error.
 %%  Find a record field in a field list.
 
 find_field(F, [{record_field,_Af,{atom,_Aa,F},Val}|_Fs]) -> {ok,Val};
 find_field(F, [_|Fs]) -> find_field(F, Fs);
 find_field(_F, []) -> error.
+
+pattern_native_record_fields(Name, Fs, Vt0, Old, St0) ->
+    CheckFun = fun (Val, Vt, St) -> pattern(Val, Vt, Old, St) end,
+    {_SeenFields,Uvt,Unew,St1} =
+        foldl(fun (Field, {Rfsa,Vta,Newa,Sta}) ->
+                      case check_nn_field(Name, Field, Vt0, Sta, Rfsa, CheckFun) of
+                          {Rfsb,{Vtb,Stb}} ->
+                              {Vt, St1} = vtmerge_pat(Vta, Vtb, Stb),
+                              {Rfsb, Vt, [], St1};
+                          {Rfsb,{Vtb,Newb,Stb}} ->
+                              {Vt, Mst0} = vtmerge_pat(Vta, Vtb, Stb),
+                              {New, Mst} = vtmerge_pat(Newa, Newb, Mst0),
+                              {Rfsb, Vt, New, Mst}
+                      end
+              end, {[],[],[],St0}, Fs),
+    {Uvt,Unew,St1}.
+
+%% Check that there are no duplicate fields in native record usages. We
+%% don't have the definition of the native record here.
+check_nn_fields(Name, Fs, Vt0, St0) ->
+    CheckFun = fun expr/3,
+    {_SeenFields,Uvt,St1} =
+        foldl(fun (Field, {Rfsa,Vta,Sta}) ->
+                      {Rfsb,{Vtb,Stb}} = check_nn_field(Name, Field, Vt0, Sta, Rfsa, CheckFun),
+                      {Vt1, St1} = vtmerge_pat(Vta, Vtb, Stb),
+                      {Rfsb, Vt1, St1}
+              end, {[],[], St0}, Fs),
+    {Uvt,St1}.
+
+check_nn_field(Name, {record_field, Af, {atom, _, F}, Val}, Vt, St, Rfs, CheckFun) ->
+    case member(F, Rfs) of
+        true ->
+            {Rfs, {[], add_error(Af, {redefine_field, Name, F}, St)}};
+        false ->
+            {[F|Rfs],CheckFun(Val, Vt, St)}
+    end.
+
+%% Check native record fields against the definition and issue
+%% warnings.
+-spec check_native_record_fields_usage(atom(),
+                                [erl_parse:af_record_field(erl_parse:abstract_expr())],
+                                lint_state()) ->
+          lint_state().
+check_native_record_fields_usage(Name, Fs, St0) ->
+    case St0#lint.records of
+        #{Name := {_A, native, FieldDefs}} ->
+            foldl(fun({record_field, Af, {atom, _, F}, _Val}, St) ->
+                          case exist_native_record_field(F, FieldDefs) of
+                              true ->
+                                  St;
+                              false ->
+                                  E = {undefined_field, Name, F},
+                                  maybe_add_warning(Af, E, St)
+                          end
+                  end, St0, Fs);
+        #{} ->
+            St0
+    end.
 
 %% type_def(Attr, Anno, TypeName, PatField, Args, State) -> State.
 %%    Attr :: 'type' | 'opaque'
@@ -3464,10 +4068,19 @@ check_type_2({type, A, binary, [Base, Unit]}, SeenVars, St) ->
     {SeenVars, St1};
 check_type_2({type, A, record, [Name|Fields]}, SeenVars, St) ->
     case Name of
-	{atom, _, Atom} ->
+        {atom, _, Atom} ->
 	    St1 = used_record(Atom, St),
 	    check_record_types(A, Atom, Fields, SeenVars, St1);
-	_ -> {SeenVars, add_error(A, {type_syntax, record}, St)}
+	{tuple, _, [{atom, _, Mod}, {atom, _, Atom}]} ->
+            if
+                Mod =:= St#lint.module ->
+                    St1 = used_record(Atom, St),
+                    check_record_types(A, Atom, Fields, SeenVars, St1);
+                true ->
+                    check_record_types(A, {Mod, Atom}, Fields, SeenVars, St)
+            end;
+	_ ->
+            {SeenVars, add_error(A, {type_syntax, record}, St)}
     end;
 check_type_2({type, _A, Tag, Args}=_F, SeenVars, St) when Tag =:= product;
                                                           Tag =:= tuple ->
@@ -3540,22 +4153,38 @@ check_type_2(I, SeenVars, St) ->
             {SeenVars, add_error(element(2, I), {type_syntax, integer}, St)}
     end.
 
-check_record_types(Anno, Name, Fields, SeenVars, St) ->
-    case maps:find(Name, St#lint.records) of
-        {ok,{_A,DefFields}} ->
-	    case lists:all(fun({type, _, field_type, _}) -> true;
-			      (_) -> false
-			   end, Fields) of
+check_record_types(Anno, {Mod, Name}, Fields, SeenVars, St) ->
+    if
+        Mod =:= St#lint.module ->
+            check_record_types(Anno, Name, Fields, SeenVars, St);
+        true ->
+            {SeenVars, St}
+    end;
+check_record_types(Anno, Name, Fields, SeenVars, St) when is_atom(Name) ->
+    case St#lint.records of
+        #{Name := {_A,native,_DefFields}} ->
+            case Fields of
+                [] ->
+                    {SeenVars, St};
+                [Token|_] ->
+                    {SeenVars, add_error(element(2, Token),
+                                         native_record_field_types, St)}
+            end;
+        #{Name := {_A,_,DefFields}} ->
+            case all(fun({type, _, field_type, _}) -> true;
+                        (_) -> false
+                     end, Fields) of
 		true ->
 		    check_record_types(Fields, Name, DefFields, SeenVars, St, []);
 		false ->
 		    {SeenVars, add_error(Anno, {type_syntax, record}, St)}
 	    end;
-        error ->
-            RecordNames = [atom_to_list(R) || R <- maps:keys(St#lint.records)],
-            case most_possible_string(Name, RecordNames) of
-                [] -> {SeenVars, add_error(Anno, {undefined_record, Name}, St)};
-                GuessF -> {SeenVars, add_error(Anno, {undefined_record, Name, GuessF}, St)}
+        #{} ->
+            case St#lint.rec_imports of
+                #{Name := _Mod} ->
+                    {SeenVars, St};
+                #{} ->
+                    {SeenVars, suggest_record_name(Anno, undefined_record, Name, St)}
             end
     end.
 
@@ -3565,11 +4194,8 @@ check_record_types([{type, _, field_type, [{atom, Anno, FName}, Type]}|Left],
     St1 = case exist_field(FName, DefFields) of
               true -> St;
               false ->
-                  FieldNames = [atom_to_list(R) || {record_field, _L, {_, _, R}, _} <- DefFields],
-                  case most_possible_string(FName, FieldNames) of
-                      [] -> add_error(Anno, {undefined_field,Name,FName}, St);
-                      GuessF -> add_error(Anno, {undefined_field,Name,FName,GuessF}, St)
-                  end
+                  E = undefined_field,
+                  suggest_field_name(Anno, E, Name, FName, DefFields, St)
           end,
     %% Check for duplicates
     St2 = case ordsets:is_element(FName, SeenFields) of
@@ -3778,8 +4404,8 @@ add_missing_spec_warnings(Forms, St0, Type) ->
     Warns = %% functions + line numbers for which we should warn
 	case Type of
 	    all ->
-		[{FA,Anno} || {function,Anno,F,A,_} <- Forms,
-			   not lists:member(FA = {F,A}, Specs)];
+		[{{F,A},Anno} || {function,Anno,F,A,_} <- Forms,
+                                 not lists:member({F,A}, Specs)];
 	    _ ->
                 Exps0 = gb_sets:to_list(exports(St0)) -- pseudolocals(),
                 Exps1 =
@@ -3789,8 +4415,8 @@ add_missing_spec_warnings(Forms, St0, Type) ->
                             Exps0
                     end,
                 Exps = Exps1 -- Specs,
-		[{FA,Anno} || {function,Anno,F,A,_} <- Forms,
-			   member(FA = {F,A}, Exps)]
+		[{{F,A},Anno} || {function,Anno,F,A,_} <- Forms,
+                                 member({F,A}, Exps)]
 	end,
     foldl(fun ({FA,Anno}, St) ->
 		  add_warning(Anno, {missing_spec,FA}, St)
@@ -4043,7 +4669,7 @@ icrt_export([], _, _, _, Acc) ->
 
 handle_comprehension(E, Qs, Vt0, St0) ->
     {Vt1, Uvt, St1} = lc_quals(Qs, Vt0, St0),
-    {Evt,St2} = comprehension_expr(E, Vt1, St1),
+    {Evt,St2} = comprehension_exprs(E, Vt1, St1),
     Vt2 = vtupdate(Evt, Vt1),
     %% Shadowed global variables.
     {_,St3} = check_old_unused_vars(Vt2, Uvt, St2),
@@ -4060,8 +4686,19 @@ handle_comprehension(E, Qs, Vt0, St0) ->
     Vt = vt_no_unsafe(vt_no_unused(Vt4)),
     {Vt, St}.
 
+comprehension_exprs(Es, Vt, St0) when is_list(Es) ->
+    foldl(fun (E, {Esvt, St1}) ->
+                  {Evt, St2} = comprehension_expr(E, Vt, St1),
+                  vtmerge_pat(Evt, Esvt, St2)
+          end, {[], St0}, Es);
+comprehension_exprs(E, Vt, St) ->
+    comprehension_expr(E, Vt, St).
+
 comprehension_expr({map_field_assoc,_,K,V}, Vt0, St0) ->
     expr_list([K,V], Vt0, St0);
+comprehension_expr({map_field_exact,A,K,V}, Vt0, St0) ->
+    St = add_error(A, illegal_map_exact_in_comprehension, St0),
+    expr_list([K,V], Vt0, St);
 comprehension_expr(E, Vt, St) ->
     expr(E, Vt, St).
 
@@ -4115,11 +4752,22 @@ lc_quals([F|Qs], Vt, Uvt, St0) ->
     Info = is_guard_test2_info(St0),
     {Fvt,St1} = case is_guard_test2(F, Info) of
 		    true -> guard_test(F, Vt, St0);
-		    false -> expr(F, Vt, St0)
+		    false -> expr(F, Vt, check_compr_assign(F, St0))
 		end,
     lc_quals(Qs, vtupdate(Fvt, Vt), Uvt, St1);
 lc_quals([], Vt, Uvt, St) ->
     {Vt, Uvt, St}.
+
+check_compr_assign({match,Anno,_,_}, St) ->
+    case is_feature_enabled(compr_assign, St) of
+        true -> St;
+        false -> add_error(Anno, compr_assign, St)
+    end;
+check_compr_assign(_, St) ->
+    St.
+
+is_feature_enabled(Name, St) ->
+    lists:member(Name, St#lint.features).
 
 is_guard_test2_info(#lint{records=RDs,locals=Locals,imports=Imports}) ->
     {RDs,fun(FA) ->
@@ -4311,8 +4959,14 @@ pat_var(V, Anno, Vt, New, St0) ->
                 {ok,{{export,From},_Usage,Ls}} ->
                     St = warn_underscore_match(V, Anno, St0),
                     {[{V,{bound,used,Ls}}],[],
-                     %% As this is matching, exported vars are risky.
-                     add_warning(Anno, {exported_var,V,From}, St)};
+                     case export_var_subexpr(From) of
+                         true ->
+                             maybe_add_warning(Anno, {export_var_subexpr,V,From}, St);
+                         false ->
+                             %% As this is matching, exported vars are risky.
+                             %% Always warn unconditionally.
+                             add_warning(Anno, {exported_var,V,From}, St)
+                     end};
                 error when St0#lint.recdef_top ->
                     {[],[{V,{bound,unused,[Anno]}}],
                      add_error(Anno, {variable_in_record_def,V}, St0)};
@@ -4365,9 +5019,17 @@ pat_binsize_var(V, Anno, Vt, New, St) ->
                      add_error(Anno, {unsafe_var,V,In}, St)};
                 {ok,{{export,From},_Used,As}} ->
                     {[{V,{bound,used,As}}],[],
-                     %% As this is not matching, exported vars are
-                     %% probably safe.
-                     exported_var(Anno, V, From, St)};
+                     case export_var_subexpr(From) of
+                         true ->
+                             maybe_add_warning(Anno, {export_var_subexpr,V,From}, St);
+                         false ->
+                             %% As this is not matching, exported vars are
+                             %% probably safe. The warning is conditional.
+                             case is_warn_enabled(export_vars, St) of
+                                 true -> add_warning(Anno, {exported_var,V,From}, St);
+                                 false -> St
+                             end
+                     end};
                 error ->
                     PossibleVs = [atom_to_list(DefV) || {DefV, _A} <- Vt],
                     case most_possible_string(V, PossibleVs) of
@@ -4404,12 +5066,18 @@ do_expr_var(V, Anno, Vt, St) ->
             {[{V,{bound,used,As}}],
              add_error(Anno, {unsafe_var,V,In}, St)};
         {ok,{{export,From},_Usage,As}} ->
-            case is_warn_enabled(export_vars, St) of
+            case export_var_subexpr(From) of
                 true ->
                     {[{V,{bound,used,As}}],
-                     add_warning(Anno, {exported_var,V,From}, St)};
+                     maybe_add_warning(Anno, {export_var_subexpr,V,From}, St)};
                 false ->
-                    {[{V,{{export,From},used,As}}],St}
+                    case is_warn_enabled(export_vars, St) of
+                        true ->
+                            {[{V,{bound,used,As}}],
+                             add_warning(Anno, {exported_var,V,From}, St)};
+                        false ->
+                            {[{V,{{export,From},used,As}}],St}
+                    end
             end;
         {ok,{stacktrace,_Usage,As}} ->
             {[{V,{bound,used,As}}],
@@ -4426,11 +5094,14 @@ do_expr_var(V, Anno, Vt, St) ->
             end
     end.
 
-exported_var(Anno, V, From, St) ->
-    case is_warn_enabled(export_vars, St) of
-        true -> add_warning(Anno, {exported_var,V,From}, St);
-        false -> St
-    end.
+%% warn about exporting from non-block subexpressions
+export_var_subexpr({'begin',_}) -> false;
+export_var_subexpr({'if',_}) -> false;
+export_var_subexpr({'case',_}) -> false;
+export_var_subexpr({'receive',_}) -> false;
+export_var_subexpr({'try',_}) -> false;
+export_var_subexpr({'maybe',_}) -> false;
+export_var_subexpr(_) -> true.
 
 shadow_vars(Vt, Vt0, In, St0) ->
     case is_warn_enabled(shadow_vars, St0) of
@@ -4488,11 +5159,28 @@ vtupdate(Uvt, Vt0) ->
                   end, Uvt, Vt0).
 
 %% vtunsafe(From, UpdVarTable, VarTable) -> UnsafeVarTable.
-%%  Return all new variables in UpdVarTable as unsafe.
+%%  Mark all new variables in UpdVarTable as unsafe.
 
 vtunsafe({Tag,Anno}, Uvt, Vt) ->
     Location = erl_anno:location(Anno),
-    [{V,{{unsafe,{Tag,Location}},U,As}} || {V,{_,U,As}} <- vtnew(Uvt, Vt)].
+    vt_mark_new({unsafe,{Tag,Location}}, Uvt, Vt).
+
+vtupd_unsafe(Where, NewVt, OldVt) ->
+    vtupdate(vtunsafe(Where, NewVt, OldVt), NewVt).
+
+%% vtexport(From, UpdVarTable, VarTable) -> ExpVarTable.
+%%  Mark all new variables in UpdVarTable as exported.
+
+vtexport({Tag, Anno}, Uvt, Vt) ->
+    Location = erl_anno:location(Anno),
+    vt_mark_new({export, {Tag, Location}}, Uvt, Vt).
+
+vtupd_export(Where, NewVt, OldVt) ->
+    vtupdate(vtexport(Where, NewVt, OldVt), NewVt).
+
+vt_mark_new(S, Uvt, Vt) ->
+    [{V, {merge_state(S, S0), U, Ls}}
+     || {V, {S0, U, Ls}} <- vtnew(Uvt, Vt)].
 
 %% vtmerge(VarTable, VarTable) -> VarTable.
 %%  Merge two variables tables generating a new vartable. Give priority to
@@ -4585,10 +5273,17 @@ copy_expr(Expr, Anno) ->
 %% Check a record_info call. We have already checked that it is not
 %% shadowed by an import.
 
-check_record_info_call(_Anno,Aa,[{atom,Ai,Info},{atom,_An,Name}],St) ->
+check_record_info_call(_Anno,_Aa,[{atom,Ai,Info},{atom,_An,Name}], St) ->
     case member(Info, [fields,size]) of
-        true -> exist_record(Aa, Name, St);
-        false -> add_error(Ai, illegal_record_info, St)
+        true ->
+            case St#lint.records of
+                #{Name := {_,tuple,_}} ->
+                    St;
+                #{} ->
+                    add_error(Ai, native_record_illegal_record_info, St)
+            end;
+        false ->
+            add_error(Ai, illegal_record_info, St)
     end;
 check_record_info_call(Anno,_Aa,_As,St) ->
     add_error(Anno, illegal_record_info, St).
@@ -4682,35 +5377,47 @@ check_qlc_hrl(Anno, M, F, As, St) ->
 deprecated_function(Anno, M, F, As, St) ->
     Arity = length(As),
     MFA = {M, F, Arity},
-    case otp_internal:obsolete(M, F, Arity) of
-	{deprecated, String} when is_list(String) ->
-            case not is_warn_enabled(deprecated_function, St) orelse
-		ordsets:is_element(MFA, St#lint.not_deprecated) of
-                true ->
-		    St;
-                false ->
-		    add_warning(Anno, {deprecated, MFA, String}, St)
-            end;
-	{deprecated, Replacement, Rel} ->
-            case not is_warn_enabled(deprecated_function, St) orelse
-		ordsets:is_element(MFA, St#lint.not_deprecated) of
-                true ->
-		    St;
-                false ->
-		    add_warning(Anno, {deprecated, MFA, Replacement, Rel}, St)
-            end;
-	{removed, String} when is_list(String) ->
-	    add_removed_warning(Anno, MFA, {removed, MFA, String}, St);
-	{removed, Replacement, Rel} ->
-	    add_removed_warning(Anno, MFA, {removed, MFA, Replacement, Rel}, St);
+    Obsolete = case otp_internal:obsolete(M, F, Arity) of
+                   {deprecated, Info} ->
+                       {deprecated_function,
+                        {deprecated, MFA, Info},
+                        St#lint.not_deprecated};
+                   {deprecated, Replacement, Rel} ->
+                       {deprecated_function,
+                        {deprecated, MFA, Replacement, Rel},
+                        St#lint.not_deprecated};
+                   {unsafe, possibly=Info} ->
+                       {possibly_unsafe_function, {unsafe, MFA, Info},
+                        St#lint.not_unsafe};
+                   {unsafe, Info} ->
+                       {unsafe_function, {unsafe, MFA, Info},
+                        St#lint.not_unsafe};
+                   {unsafe, Replacement, Rel} ->
+                       {unsafe_function,
+                        {unsafe, MFA, Replacement, Rel},
+                        St#lint.not_unsafe};
+                   {removed, Info} ->
+                       {removed,
+                        {removed, MFA, Info},
+                        St#lint.not_removed};
+                   {removed, Replacement, Rel} ->
+                       {removed,
+                        {removed, MFA, Replacement, Rel},
+                        St#lint.not_removed};
+                   no ->
+                      no
+               end,
+    case Obsolete of
+        {Flag, Warning, Filter} ->
+            add_usage_warning(Anno, MFA, Flag, Warning, Filter, St);
         no ->
-	    St
+            St
     end.
 
-add_removed_warning(Anno, {M, _, _}=MFA, Warning, #lint{not_removed=NotRemoved}=St) ->
-    case is_warn_enabled(removed, St) andalso
-        not gb_sets:is_element(M, NotRemoved) andalso
-        not gb_sets:is_element(MFA, NotRemoved) of
+add_usage_warning(Anno, {M,_,_}=MFA, Flag, Warning, Filter, St) ->
+    case (is_warn_enabled(Flag, St) andalso
+          not gb_sets:is_element(M, Filter) andalso
+          not gb_sets:is_element(MFA, Filter)) of
         true ->
             add_warning(Anno, Warning, St);
         false ->

@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2000-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2000-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -190,6 +190,8 @@ ET_DEFINE_CHECKED(Eterm,bignum_header_neg,Eterm,_is_bignum_header);
 ET_DEFINE_CHECKED(Uint,bignum_header_arity,Eterm,_is_bignum_header);
 ET_DEFINE_CHECKED(Eterm*,big_val,Eterm,is_big);
 ET_DEFINE_CHECKED(Eterm*,float_val,Eterm,is_float);
+ET_DEFINE_CHECKED(Eterm*,record_val,Eterm,is_record);
+ET_DEFINE_CHECKED(Uint,record_header_arity,Eterm,is_record_header);
 ET_DEFINE_CHECKED(Eterm*,tuple_val,Eterm,is_tuple);
 ET_DEFINE_CHECKED(struct erl_node_*,internal_pid_node,Eterm,is_internal_pid);
 ET_DEFINE_CHECKED(struct erl_node_*,internal_port_node,Eterm,is_internal_port);

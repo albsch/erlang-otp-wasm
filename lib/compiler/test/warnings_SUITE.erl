@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2003-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2003-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 %% %CopyrightEnd%
 %%
 -module(warnings_SUITE).
+-include_lib("stdlib/include/assert.hrl").
 
 %%-define(STANDALONE, true).
 
@@ -602,7 +603,7 @@ bin_opt_info(Config) when is_list(Config) ->
                  split_binary(T, 4).
            ">>,
 
-    Ws = (catch run_test(Config, Code, [bin_opt_info])),
+    Ws = run_test(Config, Code, [bin_opt_info]),
 
     %% This is an inexact match since the pass reports exact instructions as
     %% part of the warnings, which may include annotations that vary from run
@@ -624,7 +625,7 @@ bin_opt_info(Config) when is_list(Config) ->
      ]} = Ws,
 
     %% For coverage: don't give the bin_opt_info option.
-    [] = (catch run_test(Config, Code, [])),
+    [] = run_test(Config, Code, []),
 
     %% Now try with abstract code and no location.
     %%
@@ -654,7 +655,7 @@ bin_opt_info(Config) when is_list(Config) ->
                                [],
                                [{call,0,{atom,0,t1},[{var,0,'T'}]}]},
                            {clause,0,[{bin,0,[]}],[],[{atom,0,ok}]}]}]}]}],
-    Wsf = (catch run_forms(Forms, [bin_opt_info])),
+    Wsf = run_forms(Forms, [bin_opt_info]),
 
     {warnings,
      [{none,beam_ssa_bsm,{unsuitable_call,
@@ -731,7 +732,7 @@ maps(Config) when is_list(Config) ->
                  {'EXIT',{badarg,_}} = (catch(M#{ a => 1 })),
                  ok.
            ">>,
-           [],
+           [nowarn_deprecated_catch],
            {warnings,[{{4,48},sys_core_fold,{failed,bad_map_update}}]}},
 	   {bad_map_src2,
            <<"
@@ -741,7 +742,7 @@ maps(Config) when is_list(Config) ->
 		 ok.
 	     id(I) -> I.
            ">>,
-	   [inline],
+	   [inline,nowarn_deprecated_catch],
 	    []},
 	   {bad_map_src3,
            <<"
@@ -749,7 +750,7 @@ maps(Config) when is_list(Config) ->
                  {'EXIT',{badarg,_}} = (catch <<>>#{ a := 1}),
                  ok.
            ">>,
-           [],
+           [nowarn_deprecated_catch],
            {warnings,[{{3,51},sys_core_fold,{failed,bad_map_update}}]}},
            {ok_map_literal_key,
            <<"
@@ -1088,6 +1089,12 @@ bit_syntax(Config) ->
                 end.
               d(<<16#110000/utf8>>) -> error;
               d(_) -> ok.
+              e(<<X:1/big-signed-unit:64>>) -> {int, X};
+              e(<<X:1/big-unsigned-float-unit:64>>) -> {float, X}.
+              f(<<X:1/big-unsigned-float-unit:64>>) -> {float, X};
+              f(<<X:1/big-signed-unit:64>>) -> {int, X}.
+              g(<<X:4/signed-binary>>) -> X;
+              g(<<X:1/unsigned-binary-unit:32>>) -> X.
              ">>,
 	   [],
            {warnings,[{{2,15},sys_core_fold,{nomatch,no_clause}},
@@ -1107,7 +1114,9 @@ bit_syntax(Config) ->
                       {{12,37},sys_core_fold,{nomatch,{bit_syntax_size,bad}}},
                       {{15,21},sys_core_fold,{nomatch,{bit_syntax_unsigned,-42}}},
                       {{17,21},sys_core_fold,{nomatch,{bit_syntax_type,42,binary}}},
-                      {{19,19},sys_core_fold,{nomatch,{bit_syntax_unicode,1114112}}}
+                      {{19,19},sys_core_fold,{nomatch,{bit_syntax_unicode,1114112}}},
+                      {{22,15},beam_core_to_ssa,{nomatch,{shadow,21}}},
+                      {{26,15},beam_core_to_ssa,{nomatch,{shadow,25}}}
                      ]}
           }],
     run(Config, Ts),
@@ -1141,7 +1150,8 @@ inlining(Config) ->
 tuple_calls(Config) ->
     %% Make sure that no spurious warnings are generated.
     Ts = [{inlining_1,
-           <<"-compile(tuple_calls).
+           <<"-compile([tuple_calls,
+                        {nowarn_unsafe_function,{erlang, list_to_atom, 1}}]).
               dispatch(X) ->
                 (list_to_atom(\"prefix_\" ++
                 atom_to_list(suffix))):doit(X).
@@ -1184,7 +1194,7 @@ recv_opt_info(Config) when is_list(Config) ->
                     end.
            ">>,
 
-    Ws = (catch run_test(Config, Code, [recv_opt_info])),
+    Ws = run_test(Config, Code, [recv_opt_info]),
 
     %% This is an inexact match since the pass reports exact instructions as
     %% part of the warnings, which may include annotations that vary from run
@@ -1204,7 +1214,7 @@ recv_opt_info(Config) when is_list(Config) ->
          {23,beam_ssa_recv,{used_receive_marker,_}}]} = Ws,
 
     %% For coverage: don't give the recv_opt_info option.
-    [] = (catch run_test(Config, Code, [])),
+    [] = run_test(Config, Code, []),
 
     %% Now try with abstract code and no location.
     %%
@@ -1225,7 +1235,7 @@ recv_opt_info(Config) when is_list(Config) ->
                                      [{var,0,'Msg'}]}]}]}]}]}
     ],
 
-    Wsf = (catch run_forms(Forms, [recv_opt_info])),
+    Wsf = run_forms(Forms, [recv_opt_info]),
     {warnings, [{none,beam_ssa_recv,matches_any_message}]} = Wsf,
 
     ok.
@@ -1385,12 +1395,13 @@ lines_only_1({Loc,Mod,Error}) ->
 do_run(Config, Tests) ->
     F = fun({N,P,Ws,E}, BadL) ->
                 io:format("### ~s\n", [N]),
-                case catch run_test(Config, P, Ws) of
-                    E -> 
-                        BadL;
-                    Bad -> 
+                try run_test(Config, P, Ws) of
+                    E ->
+                        BadL
+                catch
+                    error:Bad:Stack ->
                         io:format("~nTest ~p failed. Expected~n  ~p~n"
-                                  "but got~n  ~p~n", [N, E, Bad]),
+                                  "but got~n  ~p ~p~n", [N, E, Bad, Stack]),
 			fail()
                 end
         end,

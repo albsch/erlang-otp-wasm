@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1998-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,6 +20,9 @@
 %% %CopyrightEnd%
 
 -module(erl_eval_SUITE).
+
+-feature(compr_assign, enable).
+
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1,
 	 init_per_testcase/2, end_per_testcase/2,
 	 init_per_group/2,end_per_group/2]).
@@ -34,6 +37,8 @@
          zlc/1,
          zbc/1,
          zmc/1,
+         multi_lc/1,
+         multi_mc/1,
          simple_cases/1,
          unary_plus/1,
          apply_atom/1,
@@ -63,6 +68,7 @@
          binary_and_map_aliases/1,
          eep58/1,
          strict_generators/1,
+         assignment_generators/1,
          binary_skip/1]).
 
 %%
@@ -106,7 +112,7 @@ all() ->
      funs, custom_stacktrace, try_catch, eval_expr_5, zero_width,
      eep37, eep43, otp_15035, otp_16439, otp_14708, otp_16545, otp_16865,
      eep49, binary_and_map_aliases, eep58, strict_generators, binary_skip,
-     zlc, zbc, zmc].
+     assignment_generators, zlc, zbc, zmc, multi_lc, multi_mc].
 
 groups() ->
     [].
@@ -451,6 +457,28 @@ zmc(Config) when is_list(Config) ->
         {bad_generators,{#{1 => 2},#{2 => 3}}}),
     ok.
 
+%% EEP 78: multi-comprehensions
+multi_lc(Config) when is_list(Config) ->
+    check(fun() -> lists:append([[1, 2] || _ <- [1, 2]]) end,
+          "[1, 2 || _ <- [1, 2]].",
+          [1, 2, 1, 2]),
+    check(fun() -> lists:append([[one, two] || true]) end,
+          "[one, two || true].",
+          [one, two]),
+    error_check("[X = 1, X || true].", {unbound_var,'X'}).
+
+multi_mc(Config) when is_list(Config) ->
+    check(fun() -> #{A => B || X <- [1, 5], {A, B} <- [{X, X+1}, {X+2, X+3}]} end,
+        "#{X => X+1, X+2 => X+3 || X <- [1, 5]}.",
+        #{1 => 2, 3 => 4, 5 => 6, 7 => 8}),
+    check(fun() -> #{A => B || X <- [1, 5], {A, B} <- [{X, X+1}, {X, X+3}]} end,
+        "#{X => X+1, X => X+3 || X <- [1, 5]}.",
+        #{1 => 4, 5 => 8}),
+    error_check("#{1 := 2 || _ <- []}.", illegal_map_exact_in_comprehension),
+    error_check("#{1 => 2, 3 := 4 || _ <- []}.", illegal_map_exact_in_comprehension),
+    error_check("#{X = key => value, X => value2 || true}.", {unbound_var,'X'}),
+    error_check("#{key => x = value, key2 => X || true}.", {unbound_var,'X'}).
+
 %% Simple cases, just to cover some code.
 simple_cases(Config) when is_list(Config) ->
     check(fun() -> A = $C end, "A = $C.", $C),
@@ -667,9 +695,9 @@ simple_cases(Config) when is_list(Config) ->
                 "(2#101 band 2#10101) bor (2#110 bxor 2#010).", 5),
 	  check(fun() -> (2#1 bsl 4) + (2#10000 bsr 3) end,
                 "(2#1 bsl 4) + (2#10000 bsr 3).", 18),
-	  check(fun() -> ((1<3) and ((1 =:= 2) or (1 =/= 2))) xor (1=<2) end,
+	  check(fun() -> (1 < 3 andalso (1 =:= 2 orelse 1 =/= 2)) xor (1 =< 2) end,
                 "((1<3) and ((1 =:= 2) or (1 =/= 2))) xor (1=<2).", false),
-	  check(fun() -> (a /= b) or (2 > 4) or (3 >= 3) end,
+	  check(fun() -> a /= b orelse 2 > 4 orelse 3 >= 3 end,
                 "(a /= b) or (2 > 4) or (3 >= 3).", true),
 	  check(fun() -> "hej" ++ "san" =/= "hejsan" -- "san" end,
                 "\"hej\" ++ \"san\" =/= \"hejsan\" -- \"san\".", true),
@@ -1312,10 +1340,6 @@ otp_14826(_Config) ->
                     {argument_limit,
                      {named_fun,1,'F',[{clause,1,Args,[],[{atom,1,a}]}]}},
                     [{erl_eval,expr,6}, ?MODULE]),
-    backtrace_check("#r{}.",
-                    {undef_record,r},
-                    [{erl_eval,expr,6}, ?MODULE],
-                    none, none),
     %% eval_bits
     backtrace_check("<<100:8/bitstring>>.",
                     badarg,
@@ -1381,13 +1405,6 @@ custom_stacktrace(Config) when is_list(Config) ->
                     [erl_eval, mystack(1)], none, EFH),
 
     backtrace_check("Unknown.", {unbound, 'Unknown'},
-                    [erl_eval, mystack(1)], none, EFH),
-
-    backtrace_check("#unknown{}.", {undef_record,unknown},
-                    [erl_eval, mystack(1)], none, EFH),
-    backtrace_check("#unknown{foo=bar}.", {undef_record,unknown},
-                    [erl_eval, mystack(1)], none, EFH),
-    backtrace_check("#unknown.index.", {undef_record,unknown},
                     [erl_eval, mystack(1)], none, EFH),
 
     backtrace_check("foo(1, 2).", undef,
@@ -2329,6 +2346,22 @@ binary_skip(Config) when is_list(Config) ->
     check(fun() -> [a || <<0:64/float>> <= <<0:64, 1:64, 0:64, 0:64>> ] end,
 	  "begin [a || <<0:64/float>> <= <<0:64, 1:64, 0:64, 0:64>> ] end.",
 	  [a,a,a]),
+    ok.
+
+%% requires compr_assign feature for now
+assignment_generators(Config) when is_list(Config) ->
+    %% erl_eval accepts only features that are enabled in the runtime
+    case lists:member(compr_assign, erl_features:enabled()) of
+        false ->
+            ok;
+        true ->
+            check(fun() -> [Res1 + Res2 || E <- [1,2], EE <- [1,2,3], Res1 = 3*EE, Res2 = 7*E] end,
+                  "[Res1 + Res2 || E <- [1,2], EE <- [1,2,3], Res1 = 3*EE, Res2 = 7*E].",
+                  [10,13,16,17,20,23]),
+            check(fun() -> [Sqr || E <- [1,2,3,4,5], is_integer(E), Sqr = E*E, Sqr < 20] end,
+                  "[Sqr || E <- [1,2,3,4,5], is_integer(E), Sqr = E*E, Sqr < 20].",
+                  [1,4,9,16])
+    end,
     ok.
 
 %% Check the string in different contexts: as is; in fun; from compiled code.

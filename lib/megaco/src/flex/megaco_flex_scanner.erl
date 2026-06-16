@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2001-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -190,11 +190,17 @@ load_driver(Path) ->
     end.
 
 
+%% Flex scanner driver not built on Windows.
+%% This is to suppress Dialyzer warnings.
+-dialyzer({nowarn_function, open_drv_port/1}).
 open_drv_port(true) ->
     open_drv_ports(?NUM_SCHED(), []);
 open_drv_port(_) ->
     open_drv_port().
 
+%% Flex scanner driver not built on Windows.
+%% This is to suppress Dialyzer warnings.
+-dialyzer({nowarn_function, open_drv_ports/2}).
 open_drv_ports(0, Acc) ->
     list_to_tuple(Acc);
 open_drv_ports(N, Acc) when is_integer(N) andalso (N > 0) ->
@@ -301,7 +307,7 @@ version([_|T]) ->
     version(T).
 
 
-guess_version([C]) when (48 =< C) and (C =< 57) ->
+guess_version([C]) when 48 =< C, C =< 57 ->
     C-48;
 guess_version(Str) when is_list(Str) ->
     case (catch list_to_integer(Str)) of

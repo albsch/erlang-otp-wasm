@@ -4,7 +4,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// Copyright Ericsson AB 2017-2025. All Rights Reserved.
+// Copyright Ericsson AB 2017-2026. All Rights Reserved.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -1314,4 +1314,115 @@ i_lambda_error(Dummy) {
 }
 
 padding() {
+}
+
+//
+// Native records.
+//
+
+is_any_native_record(Fail, Src) {
+    if (!is_record($Src)) {
+        $FAIL($Fail);
+    }
+}
+
+i_is_native_record(Fail, Src, Mod, Name) {
+    if (!erl_is_native_record($Src, $Mod, $Name)) {
+        $FAIL($Fail);
+    }
+}
+
+i_is_record_accessible(Fail, Src) {
+    if (!erl_is_record_accessible($Src)) {
+        $FAIL($Fail);
+    }
+}
+
+i_is_wildcard_record_accessible(Fail, Src, Module) {
+    if (!erl_is_wildcard_record_accessible($Src, $Module)) {
+        $FAIL($Fail);
+    }
+}
+
+i_get_record_elements(Fail, Src, N) {
+    bool succeeded;
+    SWAPOUT;
+    succeeded = erl_get_record_elements(c_p, reg, $Src, $N, $NEXT_INSTRUCTION);
+    SWAPIN;
+    if (!succeeded) {
+        $FAIL($Fail);
+    }
+    $NEXT($NEXT_INSTRUCTION+$N);
+}
+
+i_create_local_native_record(Def, Dst, Live, N) {
+    Eterm res;
+
+    HEAVY_SWAPOUT;
+    res = erl_create_local_native_record(c_p, reg, $Def, $Live, $N, $NEXT_INSTRUCTION);
+    HEAVY_SWAPIN;
+    if (is_non_value(res)) {
+        $FAIL_BODY();
+    } else {
+        $REFRESH_GEN_DEST();
+        $Dst = res;
+        $NEXT($NEXT_INSTRUCTION+$N);
+    }
+}
+
+i_create_native_record(Id, Dst, Live, N) {
+    Eterm res;
+
+    HEAVY_SWAPOUT;
+    res = erl_create_native_record(c_p, reg, $Id, $Live, $N, $NEXT_INSTRUCTION);
+    HEAVY_SWAPIN;
+    if (is_non_value(res)) {
+        $FAIL_BODY();
+    } else {
+        $REFRESH_GEN_DEST();
+        $Dst = res;
+        $NEXT($NEXT_INSTRUCTION+$N);
+    }
+}
+
+i_update_native_record(Src, Dst, Live, N) {
+    Eterm res;
+
+    HEAVY_SWAPOUT;
+    res = erl_update_native_record(c_p, reg, $Src, $Live, $N, $NEXT_INSTRUCTION);
+    HEAVY_SWAPIN;
+    if (is_non_value(res)) {
+        $FAIL_BODY();
+    } else {
+        $REFRESH_GEN_DEST();
+        $Dst = res;
+        $NEXT($NEXT_INSTRUCTION+$N);
+    }
+}
+
+i_get_local_record_field(Fail, Src, Id, Field, Dst) {
+    Eterm res;
+
+    HEAVY_SWAPOUT;
+    res = erl_get_local_record_field(c_p, $Src, $Id, $Field);
+    HEAVY_SWAPIN;
+    if (is_non_value(res)) {
+        $FAIL_HEAD_OR_BODY($Fail);
+    } else {
+        $Dst = res;
+    }
+}
+
+i_get_record_field(Fail, Src, Id, Field, Dst) {
+    Eterm res;
+
+    HEAVY_SWAPOUT;
+    res = erl_get_record_field(c_p, $Src, $Id, $Field);
+    HEAVY_SWAPIN;
+
+    if (is_non_value(res)) {
+        $FAIL_HEAD_OR_BODY($Fail);
+    } else {
+        $Dst = res;
+    }
 }

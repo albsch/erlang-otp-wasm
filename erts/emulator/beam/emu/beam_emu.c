@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,6 +44,7 @@
 #include "dtrace-wrapper.h"
 #include "erl_proc_sig_queue.h"
 #include "beam_common.h"
+#include "erl_record.h"
 
 /* #define HARDDEBUG 1 */
 
@@ -86,14 +87,20 @@
 #define ADD_BYTE_OFFSET(ptr, offset) \
    ((Eterm *) (((unsigned char *)ptr) + (offset)))
 
+#if defined(__clang__)
+#  define BROKEN_VALID_INSTR_CHECK
+#endif
+
 /* We don't check the range if an ordinary switch is used */
 #ifdef NO_JUMP_TABLE
 #  define VALID_INSTR(IP) (BeamCodeAddr(IP) < (NUMBER_OF_OPCODES*2+10))
+#elif defined(BROKEN_VALID_INSTR_CHECK)
+#  define VALID_INSTR(IP) (true)
 #else
 #  define VALID_INSTR(IP) \
     ((BeamInstr)LabelAddr(emulator_loop) <= BeamCodeAddr(IP) && \
      BeamCodeAddr(IP) < (BeamInstr)LabelAddr(end_emulator_loop))
-#endif /* NO_JUMP_TABLE */
+#endif
 
 #define SET_I(ip) \
    ASSERT(VALID_INSTR(* (Eterm *)(ip))); \
@@ -439,7 +446,7 @@ void process_main(ErtsSchedulerData *esdp)
 	Goto(next);
     }
 
-#if defined(DEBUG) || defined(NO_JUMP_TABLE)
+#if defined(NO_JUMP_TABLE) || (defined(DEBUG) && !defined(BROKEN_VALID_INSTR_CHECK))
  emulator_loop:
 #endif
 
@@ -578,17 +585,15 @@ void process_main(ErtsSchedulerData *esdp)
     DEFINE_COUNTING_LABELS;
 #endif
 
-#ifndef NO_JUMP_TABLE
-#ifdef DEBUG
+#if defined(DEBUG) && !defined(BROKEN_VALID_INSTR_CHECK)
  end_emulator_loop:
-#endif
 #endif
 
  OpCase(int_code_end):
  OpCase(label_L):
  OpCase(on_load):
  OpCase(line_I):
- OpCase(i_debug_line_It):
+ OpCase(i_debug_line_IIt):
  OpCase(i_nif_padding):
     erts_exit(ERTS_ERROR_EXIT, "meta op\n");
 

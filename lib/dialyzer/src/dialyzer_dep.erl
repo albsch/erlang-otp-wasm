@@ -5,7 +5,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 %%
 %% Copyright 2004-2010 held by the authors. All Rights Reserved.
-%% Copyright Ericsson AB 2009-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -223,6 +223,15 @@ traverse(Tree, Out, State, CurrentFun) ->
     map_pair ->
       Key = cerl:map_pair_key(Tree),
       Val = cerl:map_pair_val(Tree),
+      {List, State1} = traverse_list([Key,Val], Out, State, CurrentFun),
+      {merge_outs(List), State1};
+    record ->
+      Args = cerl:record_es(Tree),
+      {List, State1} = traverse_list(Args, Out, State, CurrentFun),
+      {merge_outs(List), State1};
+    record_pair ->
+      Key = cerl:record_pair_key(Tree),
+      Val = cerl:record_pair_val(Tree),
       {List, State1} = traverse_list([Key,Val], Out, State, CurrentFun),
       {merge_outs(List), State1};
     values ->

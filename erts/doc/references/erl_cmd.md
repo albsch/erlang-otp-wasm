@@ -3,7 +3,7 @@
 
 SPDX-License-Identifier: Apache-2.0
 
-Copyright Ericsson AB 2023-2025. All Rights Reserved.
+Copyright Ericsson AB 2023-2026. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -348,6 +348,18 @@ described in the corresponding application documentation.
   > attacks that may give the attacker complete access to the node and in
   > extension the cluster. When using un-secure distributed nodes, make sure
   > that the network is configured to keep potential attackers out.
+
+- **`-nocookie`** - Prevents the node from creating or using the magic
+  cookie.
+
+  When this flag is used, the node will not read the `~/.erlang.cookie` file on startup.
+
+  The node's own cookie will remain "undefined" unless explicitly set later via
+  `erlang:set_cookie/1` or `erlang:set_cookie/2`.
+
+  This effectively prevents the node from participating in a distributed Erlang
+  cluster with nodes that require cookie authentication. It is primarily used
+  for nodes that are intended to be isolated.
 
 - **`-no_epmd`** - Specifies that the distributed node does not need
   [epmd](epmd_cmd.md) at all.
@@ -1367,7 +1379,20 @@ behavior of earlier flags.
   >
   > This flag can be removed or changed at any time without prior notice.
 
-- **`+v`** - Verbose.
+- **`+v`** - Verbose logging. Only works if Erlang is compiled with debug enabled.
+  Can optionally take an additional character to specify the types of debugging
+  messages logged:
+
+  - **`+vs`** - `DEBUG_SYSTEM`, same as `+v`
+  - **`+vg`** - `DEBUG_PRIVATE_GC`
+  - **`+vM`** - `DEBUG_MEMORY`
+  - **`+va`** - `DEBUG_ALLOCATION`
+  - **`+vt`** - `DEBUG_THREADS`
+  - **`+vp`** - `DEBUG_PROCESSES`
+  - **`+vm`** - `DEBUG_MESSAGES`
+  - **`+vc`** - `DEBUG_SHCOPY`
+  
+  This is erts debugging functionality and can change at any time without prior notice.
 
 - **`+V`** - Makes the emulator print its version number.
 
@@ -1470,6 +1495,25 @@ behavior of earlier flags.
   a crash dump file.
 
   Introduced in ERTS 8.1.2 (Erlang/OTP 19.2).
+
+- **`ERL_CRASH_DUMP_PUBLIC_KEY`{: #ERL_CRASH_DUMP_PUBLIC_KEY }** - If the
+  emulator has been built to emit encrypted crash dumps, this variable **must**
+  be set to a file containing the public key to be used for encryption
+  (in x509 format, usually known as ".pem" files).
+
+  When built to emit encrypted crash dumps, the emulator will refuse to start
+  if this is not properly configured, as it would be too late to handle any
+  potential issues when the emulator is crashing.
+
+  Under this encryption scheme, the emulator only knows how to _encrypt_ the
+  crash dump. To decrypt a crash dump, the `m:crashdump` module should be used
+  with the _private key_, and care should be taken not to store the
+  _private key_ on the target system.
+
+  Supported key types are RSA of 2048 bits or higher, as well as ML-KEM if
+  your OpenSSL installation supports it.
+
+  Introduced in ERTS 16.3 (Erlang/OTP 29).
 
 - **`ERL_AFLAGS`{: #ERL_AFLAGS }** - The content of this variable is added to
   the beginning of the command line for `erl`.

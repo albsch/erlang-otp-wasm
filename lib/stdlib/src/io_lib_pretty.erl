@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -144,7 +144,7 @@ print(Atom, _Col, _Ll, _D, _M, _T, _RF, Enc, _Str, _Ord)
   when is_atom(Atom) ->
     write_atom(Atom, Enc);
 print(Term, Col, Ll, D, M0, T, RecDefFun, Enc, Str, Ord)
-  when is_tuple(Term); is_list(Term); is_map(Term); is_bitstring(Term) ->
+  when is_tuple(Term); is_list(Term); is_map(Term); is_bitstring(Term); is_record(Term) ->
     %% preprocess and compute total number of chars
     {_, Len, _Dots, _} = If =
         case T < 0 of
@@ -183,7 +183,7 @@ print_bin(Atom, _Col, _Ll, _D, _M, _T, _RF, {InEnc, _}, _Str, _Ord)
     {Bin, Sz} = io_lib:write_bin(Atom, -1, InEnc, undefined, -1),
     {Bin, Sz, -Sz};
 print_bin(Term, Col, Ll, D, M0, T, RecDefFun, Enc, Str, Ord)
-  when is_tuple(Term); is_list(Term); is_map(Term); is_bitstring(Term) ->
+  when is_tuple(Term); is_list(Term); is_map(Term); is_bitstring(Term); is_record(Term) ->
     %% preprocess and compute total number of chars
     {_, Len, _Dots, _} = If =
         case T < 0 of
@@ -342,9 +342,9 @@ pp_fields_tail([{_, Len, _, _}=F | Fs], Col0, Col, Ll, M, TInd, Ind, LD, W) ->
 pp_field({_, Len, _, _}=Fl, Col, Ll, M, _TInd, _Ind, LD, W)
          when Len < Ll - Col - LD, Len + W + LD =< M ->
     {write_field(Fl), if
-                          ?ATM_FLD(Fl) -> 
+                          ?ATM_FLD(Fl) ->
                               Len;
-                          true -> 
+                          true ->
                               Ll % force nl
                       end};
 pp_field({{field, Name, NameL, F},_,_, _}, Col0, Ll, M, TInd, Ind0, LD, W0) ->
@@ -357,7 +357,7 @@ pp_field({{field, Name, NameL, F},_,_, _}, Col0, Ll, M, TInd, Ind0, LD, W0) ->
 
 rec_indent(RInd, TInd, Col0, Ind0, W0) ->
     %% this uses TInd
-    Nl = (TInd > 0) and (RInd > TInd),
+    Nl = TInd > 0 andalso RInd > TInd,
     DCol = case Nl of
                true -> TInd;
                false -> RInd
@@ -935,6 +935,8 @@ print_length(<<_/bitstring>> = Bin, 1, _T, RF, Enc, Str, Ord) ->
     {"<<...>>", 7, 3, More};
 print_length(<<_/bitstring>> = Bin, D, T, RF, Enc, Str, Ord) ->
     print_length_binary(Bin, D, T, RF, Enc, Str, Ord);
+print_length(Record, D, T, RF, Enc, Str, Ord) when is_record(Record) ->
+    print_length_native_record(Record, D, T, RF, Enc, Str, Ord);
 print_length(Term, _D, _T, _RF, _Enc, _Str, _Ord) ->
     S = io_lib:write(Term),
     %% S can contain unicode, so iolist_size(S) cannot be used here
@@ -951,7 +953,7 @@ print_length_map(Map, D, T, RF, Enc, Str, Ord) when is_map(Map) ->
 
 print_length_map_pairs(none, _D, _D0, _T, _RF, _Enc, _Str, _Ord) ->
     [];
-print_length_map_pairs(Term, D, D0, T, RF, Enc, Str, Ord) when D =:= 1; T =:= 0->
+print_length_map_pairs(Term, D, D0, T, RF, Enc, Str, Ord) when D =:= 1; T =:= 0 ->
     More = fun(T1, Dd) ->
                    ?FUNCTION_NAME(Term, D+Dd, D0, T1, RF, Enc, Str, Ord)
            end,
@@ -973,12 +975,45 @@ print_length_map_pair(K, V, D, T, RF, Enc, Str, Ord) ->
     {_, VL, VD, _} = P2 = print_length(V, D, tsub(T, KL1), RF, Enc, Str, Ord),
     {{map_pair, P1, P2}, KL1 + VL, KD + VD, no_more}.
 
+print_length_native_record(Rec, 1, _T, RF, Enc, Str, Ord) ->
+    More = fun(T1, Dd) -> ?FUNCTION_NAME(Rec, 1+Dd, T1, RF, Enc, Str, Ord) end,
+    RecStr = io_lib:write(Rec, 1, Enc, Ord, -1),
+    {RecStr, io_lib:chars_length(RecStr), 3, More};
+print_length_native_record(Rec, D, T, RF, Enc, Str, Ord) ->
+    Name = [$#, write_atom(records:get_module(Rec), Enc),
+            $:, write_atom(records:get_name(Rec), Enc)],
+    NameL = io_lib:chars_length(Name),
+    T1 = tsub(T, NameL+2),
+    Fs = records:get_field_names(Rec),
+    Pairs = print_length_native_record_fields(Fs, Rec, D-1, T1, RF, Enc, Str, Ord),
+    {Len, Dots} = list_length(Pairs, NameL + 2, 0),
+    {{record, [{Name,NameL} | Pairs]}, Len, Dots, no_more}.
+
+print_length_native_record_fields([], _Rec, _D, _T, _RF, _Enc, _Str, _Ord) ->
+    [];
+print_length_native_record_fields(Fs, Rec, D, T, RF, Enc, Str, Ord)
+  when D =:= 1; T =:= 0 ->
+    More = fun(T1, Dd) ->
+                   ?FUNCTION_NAME(Fs, Rec, D+Dd, T1, RF, Enc, Str, Ord)
+           end,
+    {dots, 3, 3, More};
+print_length_native_record_fields([F|Fs], Rec, D, T, RF, Enc, Str, Ord) ->
+    T1 = case Fs == [] of
+             true -> tsub(T, 1);
+             false -> T
+         end,
+    Key = write_atom(F, Enc),
+    KeyL = io_lib:chars_length(Key) + 3,
+    {_, VL, VD, _} = ValT = print_length(records:get(F, Rec), D-1, tsub(T1, KeyL), RF, Enc, Str, Ord),
+    [{{field, Key, KeyL, ValT}, KeyL+VL, VD, no_more}
+    | print_length_native_record_fields(Fs, Rec, D-1, tsub(T1, KeyL+VL), RF, Enc, Str, Ord)].
+
 print_length_tuple(Tuple, 1, _T, RF, Enc, Str, Ord) ->
     More = fun(T1, Dd) -> ?FUNCTION_NAME(Tuple, 1+Dd, T1, RF, Enc, Str, Ord) end,
     {"{...}", 5, 3, More};
 print_length_tuple(Tuple, D, T, RF, Enc, Str, Ord) ->
     L = print_length_tuple1(Tuple, 1, D, tsub(T, 2), RF, Enc, Str, Ord),
-    IsTagged = is_atom(element(1, Tuple)) and (tuple_size(Tuple) > 1),
+    IsTagged = is_atom(element(1, Tuple)) andalso tuple_size(Tuple) > 1,
     {Len, Dots} = list_length(L, 2, 0),
     {{tuple,IsTagged,L}, Len, Dots, no_more}.
 
@@ -1494,7 +1529,7 @@ cind_field({{field, _Name, NameL, F},_Len,_,_}, Col0, Ll, M, Ind, LD, W0) ->
     Ll.
 
 cind_rec(RInd, Col0, Ll, M, Ind, W0) ->
-    Nl = (Ind > 0) and (RInd > Ind),
+    Nl = Ind > 0 andalso RInd > Ind,
     DCol = case Nl of
                true -> Ind;
                false -> RInd

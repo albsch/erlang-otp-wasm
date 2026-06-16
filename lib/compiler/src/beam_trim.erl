@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2007-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2007-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -36,9 +36,9 @@
 -spec module(beam_utils:module_code(), [compile:option()]) ->
                     {'ok',beam_utils:module_code()}.
 
-module({Mod,Exp,Attr,Fs0,Lc}, _Opts) ->
+module({Mod,Exp,Attr,Anno,Fs0,Lc}, _Opts) ->
     Fs = [function(F) || F <- Fs0],
-    {ok,{Mod,Exp,Attr,Fs,Lc}}.
+    {ok,{Mod,Exp,Attr,Anno,Fs,Lc}}.
 
 function({function,Name,Arity,CLabel,Is0}) ->
     try
@@ -321,11 +321,11 @@ remap_block([{set,Ds0,Ss0,Info}|Is], Remap) ->
     [{set,Ds,Ss,Info}|remap_block(Is, Remap)];
 remap_block([], _) -> [].
 
-remap_debug_info({FrameSize0,Vars0}, {Trim,Map}) ->
+remap_debug_info(#{frame_size:=FrameSize0,vars:=Vars0}=Info0, {Trim,Map}) ->
     FrameSize = FrameSize0 - Trim,
     Vars = [{Name,[remap_arg(Arg, Trim, Map) || Arg <- Args]} ||
                {Name,Args} <- Vars0],
-    {FrameSize,Vars}.
+    Info0#{frame_size := FrameSize, vars := Vars}.
 
 remap_args(Args, {Trim,Map}) ->
     [remap_arg(Arg, Trim, Map) || Arg <- Args].

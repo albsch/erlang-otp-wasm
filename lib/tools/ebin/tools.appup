@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"4.1.4",
+{"4.2.1",
  [{<<".*">>,[{restart_application, tools}]}],
  [{<<".*">>,[{restart_application, tools}]}]
 }.

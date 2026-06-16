@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application,xmerl,
  [{description,"XML parser"},
-  {vsn,"2.1.9"},
+  {vsn,"2.2"},
   {modules,[
 	xmerl,
 	xmerl_b64Bin,

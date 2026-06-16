@@ -1887,7 +1887,7 @@ get_altact_msg_data(ErtsMessage *sig, void **attachedp,
     prio = !!(extra & ERTS_SIG_ALTACT_SIG_X_PRIO);
 
     if (type == ERTS_SIG_Q_TYPE_DIST || type == ERTS_SIG_Q_TYPE_DIST_FRAG) {
-        int ix = 0;
+        const Eterm* hp = sig->hfrag.mem;
         ASSERT(sig->hfrag.alloc_size
                >= (!!(extra & ERTS_SIG_ALTACT_SIG_X_PRIO)
                    + !!(extra & ERTS_SIG_ALTACT_SIG_X_ALIAS)
@@ -1895,13 +1895,13 @@ get_altact_msg_data(ErtsMessage *sig, void **attachedp,
         from = ERL_MESSAGE_FROM(sig);
         msg = THE_NON_VALUE;
         sender = ((extra & ERTS_SIG_ALTACT_SIG_X_PRIO)
-                  ? sig->hfrag.mem[ix++] /* pid */
+                  ? *hp++ /* pid */
                   : from); /* node name */
         alias = ((extra & ERTS_SIG_ALTACT_SIG_X_ALIAS)
-                 ? sig->hfrag.mem[ix++]
+                 ? *hp++
                  : THE_NON_VALUE);
         token = ((extra & ERTS_SIG_ALTACT_SIG_X_TOKEN)
-                 ? sig->hfrag.mem[ix++]
+                 ? *hp++
                  : NIL);
         attached = ERTS_MSG_COMBINED_HFRAG;
     }
@@ -3540,7 +3540,7 @@ erts_proc_sig_init_flush_signals(Process *c_p, int flags, Eterm id)
     case ERTS_PROC_SIG_FLUSH_FLG_FROM_ALL:
         id = c_p->common.id;
         force_flush_buffers = !0;
-        /* Fall through... */
+        ERTS_FALLTHROUGH();
     case ERTS_PROC_SIG_FLUSH_FLG_FROM_ID:
         if (!proc_queue_signal(NULL, id, c_p->common.id, sig,
                                force_flush_buffers, ERTS_SIG_Q_OP_FLUSH))
@@ -5438,6 +5438,7 @@ activate_suspend_monitor(Process *c_p, ErtsMonitorSuspend *msp)
     erts_aint_t mstate;
 
     erts_pause_proc_timer(c_p);
+    erts_pause_bif_timers(c_p, ERTS_PROC_LOCK_MAIN);
     mstate = erts_atomic_read_bor_acqb(&msp->state,
                                        ERTS_MSUSPEND_STATE_FLG_ACTIVE);
     ASSERT(!(mstate & ERTS_MSUSPEND_STATE_FLG_ACTIVE)); (void) mstate;
@@ -6610,6 +6611,7 @@ erts_proc_sig_handle_incoming(Process *c_p, erts_aint32_t *statep,
                             if (mstate & ERTS_MSUSPEND_STATE_FLG_ACTIVE) {
                                 erts_resume(c_p, ERTS_PROC_LOCK_MAIN);
                                 erts_resume_paused_proc_timer(c_p);
+                                erts_resume_paused_bif_timers(c_p);
                             }
                             break;
                         }

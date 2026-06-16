@@ -18,7 +18,7 @@
 
 -export([htmlise/1]).
 
--include_lib("ewgi.hrl").
+-include("ewgi.hrl").
 
 htmlise(C) ->
     iolist_to_binary(

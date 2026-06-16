@@ -32,7 +32,6 @@ MODULES= \
 	mnesia_bench_SUITE \
 	mnesia_test_lib \
 	mnesia_install_test \
-	mnesia_registry_test \
 	mnesia_config_test \
 	mnesia_frag_test \
 	mnesia_inconsistent_database_test \
@@ -94,7 +93,7 @@ RELSYSDIR = $(RELEASE_PATH)/mnesia_test
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-ERL_COMPILE_FLAGS += +nowarn_missing_spec_documented -Werror
+ERL_COMPILE_FLAGS += +nowarn_missing_spec_documented -Werror +nowarn_deprecated_catch
 ERL_COMPILE_FLAGS := $(filter-out +deterministic,$(ERL_COMPILE_FLAGS))
 
 EBIN = .

@@ -64,7 +64,7 @@ TARGET_FILES= $(MODULES:%=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
 # FLAGS
 # ----------------------------------------------------
 
-ERL_COMPILE_FLAGS += -I../../stdlib/include -Werror
+ERL_COMPILE_FLAGS += -I../../stdlib/include -Werror +nowarn_deprecated_catch
 
 
 # ----------------------------------------------------
@@ -102,3 +102,8 @@ release_spec: opt
 	$(INSTALL_DATA) $(TARGET_FILES) "$(RELSYSDIR)/ebin"
 
 release_docs_spec:
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

@@ -57,6 +57,8 @@
 #include "erl_global_literals.h"
 #include "erl_iolist.h"
 #include "erl_debugger.h"
+#include "erl_record.h"
+#include "erl_crash_dump.h"
 
 #include "jit/beam_asm.h"
 
@@ -128,8 +130,6 @@ static int no_schedulers_online;
 static int no_dirty_cpu_schedulers;
 static int no_dirty_cpu_schedulers_online;
 static int no_dirty_io_schedulers;
-
-int erts_single_threaded = 0; /* see erl_process.h */
 
 #ifdef DEBUG
 Uint32 verbose;             /* See erl_debug.h for information about verbose */
@@ -280,11 +280,11 @@ erl_init(int ncpu,
     BIN_VH_MIN_SIZE = erts_next_heap_size(BIN_VH_MIN_SIZE, 0);
 
     erts_init_debugger();
-    erts_init_trace();
     erts_code_ix_init();
     erts_init_fun_table();
     init_atom_table();
     init_export_table();
+    erts_record_init_table();
     init_module_table();
     init_register_table();
     init_message();
@@ -294,7 +294,8 @@ erl_init(int ncpu,
     erts_bif_info_init();
     erts_ddll_init();
     init_emulator();
-    erts_ptab_init(); /* Must be after init_emulator() */
+    erts_init_trace();  /* Must be after init_emulator() */
+    erts_ptab_init();   /* Must be after init_emulator() */
     erts_init_binary(); /* Must be after init_emulator() */
     erts_init_iolist(); /* Must be after init_emulator() */
     erts_bp_init();
@@ -1199,30 +1200,6 @@ early_init(int *argc, char **argv) /*
 	    dirty_cpu_scheds_online = 1;
     }
 
-    /*
-     * Single-threaded mode (wasm / ERL_SINGLE_THREADED): force the runtime
-     * onto one OS thread so the emulator can be linked without pthreads, and
-     * therefore without SharedArrayBuffer. Applied after all the normal
-     * scheduler clamps so it wins. erts_start_schedulers() honours the same
-     * flag and creates no OS threads. The dirty-NIF dispatch in erl_nif.c
-     * falls back to the normal scheduler when there are 0 dirty schedulers.
-     */
-#ifdef __EMSCRIPTEN__
-    erts_single_threaded = 1;
-#endif
-    {
-        char *st_env = getenv("ERL_SINGLE_THREADED");
-        if (st_env)
-            erts_single_threaded = atoi(st_env);
-    }
-    if (erts_single_threaded) {
-        schdlrs = 1;
-        schdlrs_onln = 1;
-        dirty_cpu_scheds = 0;
-        dirty_cpu_scheds_online = 0;
-        dirty_io_scheds = 0;
-        erts_async_max_threads = 0;
-    }
 
     no_schedulers = schdlrs;
     no_schedulers_online = schdlrs_onln;
@@ -1255,18 +1232,7 @@ early_init(int *argc, char **argv) /*
      * ** Async threads (see erl_async.c)
      * ** Dirty scheduler threads
      */
-    if (erts_single_threaded) {
-        /*
-         * The main thread (running scheduler 1) is the ONLY managed thread; it
-         * registers with pref_wakeup so it takes thread-progress id 0. No aux,
-         * poll, sys-msg, async or dirty threads exist. The managed count MUST
-         * match the number of threads that actually register (exactly 1), or
-         * the registration barrier in erts_thr_progress_register_managed_thread
-         * waits forever.
-         */
-        erts_thr_progress_init(no_schedulers, no_schedulers, 0);
-    } else {
-        erts_thr_progress_init(no_schedulers,
+    erts_thr_progress_init(no_schedulers,
 			   (no_schedulers
 			    + aux_threads
 			    + 1
@@ -1274,7 +1240,6 @@ early_init(int *argc, char **argv) /*
 			   (erts_async_max_threads
 			    + erts_no_dirty_cpu_schedulers
 			    + erts_no_dirty_io_schedulers));
-    }
     erts_thr_q_init();
     erts_init_utils();
     erts_early_init_cpu_topology(no_schedulers,
@@ -1345,6 +1310,10 @@ erl_start(int argc, char **argv)
     ErtsTimeWarpMode time_warp_mode;
     int node_tab_delete_delay = ERTS_NODE_TAB_DELAY_GC_DEFAULT;
     ErtsDbSpinCount db_spin_count = ERTS_DB_SPNCNT_NORMAL;
+
+    /* Must be set up as early as possible for crash dump encryption to work
+     * properly. */
+    erl_crash_dump_init();
 
     set_default_time_adj(&time_correction,
 			 &time_warp_mode);
@@ -2643,12 +2612,6 @@ erl_start(int argc, char **argv)
 #ifdef ERTS_ENABLE_LOCK_COUNT
     erts_lcnt_post_startup();
 #endif
-
-    if (erts_single_threaded) {
-        /* No scheduler thread was spawned; the main thread becomes scheduler 1
-         * and enters the scheduler loop. Never returns. */
-        erts_run_scheduler_on_main_thread();
-    }
 
     /* Let system specific code decide what to do with the main thread... */
     erts_sys_main_thread(); /* May or may not return! */

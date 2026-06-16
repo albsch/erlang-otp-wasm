@@ -428,7 +428,15 @@ format_unicode_error(characters_to_nfkc_list, [_]) ->
 format_unicode_error(characters_to_nfkd_binary, [_]) ->
     [bad_char_data];
 format_unicode_error(characters_to_nfkd_list, [_]) ->
-    [bad_char_data].
+    [bad_char_data];
+format_unicode_error(category, [_]) ->
+    [bad_char];
+format_unicode_error(is_whitespace, [_]) ->
+    [bad_char];
+format_unicode_error(is_id_start, [_]) ->
+    [bad_char];
+format_unicode_error(is_id_continue, [_]) ->
+    [bad_char].
 
 unicode_char_data(Chars) ->
     try unicode:characters_to_binary(Chars) of
@@ -553,7 +561,7 @@ check_io_format([Fmt, Args], Cause) ->
     case is_io_format(Fmt) of
         false ->
             [invalid_format, must_be_list(Args)] ++
-                case (is_pid(Fmt) or is_atom(Fmt)) and is_io_format(Args) of
+                case (is_pid(Fmt) orelse is_atom(Fmt)) andalso is_io_format(Args) of
                     true ->
                         %% The user seems to have called io:format(Dev,"string").
                         [{general,missing_argument_list}];
@@ -1129,6 +1137,8 @@ expand_error(bad_boolean) ->
     <<"not a boolean value">>;
 expand_error(bad_binary_list) ->
     <<"not a flat list of binaries">>;
+expand_error(bad_char) ->
+    <<"not a valid character">>;
 expand_error(bad_char_data) ->
     <<"not valid character data (an iodata term)">>;
 expand_error(bad_binary_pattern) ->

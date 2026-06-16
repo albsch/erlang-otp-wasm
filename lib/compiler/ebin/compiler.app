@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1997-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1997-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@
 
 {application, compiler,
  [{description, "ERTS  CXC 138 10"},
-  {vsn, "9.0.6"},
+  {vsn, "10.0.1"},
   {modules, [
 	     beam_a,
 	     beam_asm,
@@ -31,7 +31,6 @@
 	     beam_clean,
 	     beam_core_to_ssa,
 	     beam_dict,
-	     beam_digraph,
 	     beam_disasm,
          beam_doc,
 	     beam_flatten,
@@ -87,5 +86,5 @@
   {registered, []},
   {applications, [kernel, stdlib]},
   {env, []},
-  {runtime_dependencies, ["stdlib-6.0","kernel-8.4","erts-13.0",
+  {runtime_dependencies, ["stdlib-8.0","kernel-8.4","erts-13.0",
 			  "crypto-5.1"]}]}.

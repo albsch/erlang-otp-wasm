@@ -3,8 +3,8 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %%
-%% Copyright Ericsson AB 2009-2026. All Rights Reserved.
 %% Copyright 1997-2006 Richard Carlsson
+%% Copyright Ericsson AB 2009-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,10 +29,6 @@
 %% either the Apache License or the LGPL.
 %%
 %% %CopyrightEnd%
-%%
-%% @author Richard Carlsson <carlsson.richard@gmail.com>
-%% @end
-%% =====================================================================
 
 -module(erl_syntax).
 -moduledoc """
@@ -70,7 +66,8 @@ list `[]`. This can be relied on when writing functions that operate on syntax
 trees.
 """.
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          nowarn_deprecated_catch]).
 
 -export([type/1,
 	 is_leaf/1,
@@ -389,17 +386,16 @@ trees.
 %% first element is an atom which uniquely identifies the type of the
 %% node. (In the backwards-compatible representation, the
 %% interpretation is also often dependent on the context; the second
-%% element generally holds the annotation (see module {@link
-%% //stdlib/erl_anno} for details) which includes the position
+%% element generally holds the annotation (see module `erl_anno` for
+%% details) which includes the position
 %% information - with a couple of exceptions; see `get_pos' and
 %% `set_pos' for details.) In the documentation of this module, `Pos'
 %% is the annotation associated with a node. No assumptions are made
 %% in this module regarding the format or interpretation of the
 %% annotations. Use module erl_anno to inspect and modify annotations.
-%% In particular, use {@link //stdlib/erl_anno:location/1} to get the
-%% position information, and use {@link
-%% //stdlib/erl_anno:set_location/2} or {@link
-%% //stdlib/erl_anno:set_line/2} to change the position information.
+%% In particular, use `erl_anno:location/1` to get the
+%% position information, and use `erl_anno:set_location/2` or
+%% `erl_anno:set_line/2` to change the position information.
 %% When a syntax tree node is constructed, its associated position is
 %% by default set to the integer zero.
 %% =====================================================================
@@ -485,7 +481,7 @@ trees.
                    | erl_parse:af_remote_function().
 
 %% The representation built by the Erlang standard library parser
-%% `erl_parse'. This is a subset of the {@link syntaxTree()} type.
+%% `erl_parse'. This is a subset of the `syntaxTree()` type.
 
 %% =====================================================================
 %%
@@ -2253,8 +2249,6 @@ tuple_size(Node) ->
 
 
 %% =====================================================================
-%% @equiv list(List, none)
-
 -doc #{equiv => list(List, none)}.
 -spec list([syntaxTree()]) -> syntaxTree().
 
@@ -3070,8 +3064,6 @@ revert_eof_marker(Node) ->
 
 
 %% =====================================================================
-%% @equiv attribute(Name, none)
-
 -doc #{equiv => attribute(Name, none)}.
 -spec attribute(syntaxTree()) -> syntaxTree().
 
@@ -3299,6 +3291,32 @@ revert_attribute_1(record, [A, Tuple], Pos, Node) ->
 	_ ->
 	    Node
     end;
+revert_attribute_1(native_record, [Name, Fields], Pos, Node) ->
+    case type(Name) of
+        atom ->
+            Fs = fold_record_fields(tuple_elements(Fields)),
+            {attribute, Pos, native_record, {concrete(Name), Fs}};
+        _ ->
+            Node
+    end;
+revert_attribute_1(import_record, [M, List], Pos, Node) ->
+    case revert_module_name(M) of
+	{ok, A} ->
+	    case is_list_skeleton(List) of
+		true ->
+		    case is_proper_list(List) of
+			true ->
+			    Fs = [concrete(L) || L <- list_elements(List)],
+			    {attribute, Pos, import_record, {A, Fs}};
+			false ->
+			    Node
+		    end;
+		false ->
+		    Node
+	    end;
+	error ->
+	    Node
+    end;
 revert_attribute_1(N, [T], Pos, _) ->
     {attribute, Pos, N, concrete(T)};
 revert_attribute_1(_, _, _, Node) ->
@@ -3367,6 +3385,11 @@ attribute_arguments(Node) ->
 		     set_pos(
 		       list(unfold_function_names(Imports, Pos)),
 		       Pos)];
+		import_record ->
+		    {Module, Imports} = Data,
+		    Imports1 = [set_pos(atom(I), Pos) || I <- Imports],
+		    [set_pos(atom(Module), Pos),
+		     set_pos(list(Imports1), Pos)];
 		file ->
 		    {File, Line} = Data,
 		    [set_pos(string(File), Pos),
@@ -3374,6 +3397,11 @@ attribute_arguments(Node) ->
 		record ->
 		    %% Note that we create a tuple as container
 		    %% for the second argument!
+		    {Type, Entries} = Data,
+		    [set_pos(atom(Type), Pos),
+		     set_pos(tuple(unfold_record_fields(Entries)),
+			     Pos)];
+		native_record ->
 		    {Type, Entries} = Data,
 		    [set_pos(atom(Type), Pos),
 		     set_pos(tuple(unfold_record_fields(Entries)),
@@ -4346,7 +4374,15 @@ revert_record_access(Node) ->
     Field = record_access_field(Node),
     case type(Type) of
         atom ->
-            {record_field, Pos, Argument, concrete(Type), Field};
+            case concrete(Type) of
+                '_' ->
+                    {record_field, Pos, Argument, [], Field};
+                T ->
+                    {record_field, Pos, Argument, T, Field}
+            end;
+        list ->
+            [Mod, Name] = list_elements(Type),
+            {record_field, Pos, Argument, {concrete(Mod), concrete(Name)}, Field};
         _ ->
             Node
     end.
@@ -4377,10 +4413,14 @@ _See also: _`record_access/3`.
 
 record_access_type(Node) ->
     case unwrap(Node) of
-	{record_field, Pos, _, Type, _} ->
-	    set_pos(atom(Type), Pos);
-	Node1 ->
-	    (data(Node1))#record_access.type
+        {record_field, Pos, _, {Mod, Name}, _} ->
+            list([set_pos(atom(Mod), Pos), set_pos(atom(Name), Pos)]);
+        {record_field, Pos, _, [], _} ->
+            set_pos(atom('_'), Pos);
+        {record_field, Pos, _, Type, _} ->
+            set_pos(atom(Type), Pos);
+        Node1 ->
+            (data(Node1))#record_access.type
     end.
 
 
@@ -4424,7 +4464,8 @@ _See also: _`record_access/3`, `record_expr/2`, `record_expr_argument/1`,
 `record_expr_fields/1`, `record_expr_type/1`, `record_field/2`,
 `record_index_expr/2`.
 """.
--spec record_expr('none' | syntaxTree(), syntaxTree(), [syntaxTree()]) ->
+-spec record_expr('none' | syntaxTree(),
+                  syntaxTree() | [syntaxTree()], [syntaxTree()]) ->
         syntaxTree().
 
 %% `erl_parse' representation:
@@ -4433,35 +4474,51 @@ _See also: _`record_access/3`, `record_expr/2`, `record_expr_argument/1`,
 %% {record, Pos, Argument, Type, Fields}
 %%
 %%	Argument = erl_parse()
-%%	Type = atom()
+%%	Type = atom() | {atom(), atom()}
 %%	Fields = [Entry]
 %%	Entry = {record_field, Pos, Field, Value}
 %%	      | {record_field, Pos, Field}
 %%	Field = Value = erl_parse()
 
 record_expr(Argument, Type, Fields) ->
-    tree(record_expr, #record_expr{argument = Argument,
-				   type = Type, fields = Fields}).
+    case Type of
+        [_, _] ->
+            tree(record_expr, #record_expr{argument = Argument,
+                                           type = list(Type), fields = Fields});
+        _ ->
+            tree(record_expr, #record_expr{argument = Argument,
+                                           type = Type, fields = Fields})
+    end.
 
 revert_record_expr(Node) ->
     Pos = get_pos(Node),
     Argument = record_expr_argument(Node),
     Type = record_expr_type(Node),
     Fields = record_expr_fields(Node),
+    Fs = fold_record_fields(Fields),
     case type(Type) of
-	atom ->
-	    T = concrete(Type),
-	    Fs = fold_record_fields(Fields),
-	    case Argument of
-		none ->
-		    {record, Pos, T, Fs};
-		_ ->
-		    {record, Pos, Argument, T, Fs}
-	    end;
-	_ ->
-	    Node
+        atom ->
+            T = case concrete(Type) of
+                    '_' -> [];
+                    Res -> Res
+                end,
+            case Argument of
+                none ->
+                    {record, Pos, T, Fs};
+                _ ->
+                    {record, Pos, Argument, T, Fs}
+            end;
+        list ->
+            [Mod, Name] = list_elements(Type),
+            case Argument of
+                none ->
+                    {record, Pos, {concrete(Mod), concrete(Name)}, Fs};
+                _ ->
+                    {record, Pos, Argument, {concrete(Mod), concrete(Name)}, Fs}
+            end;
+        _ ->
+            Node
     end.
-
 
 -doc """
 Returns the argument subtree of a `record_expr` node, if any.
@@ -4494,12 +4551,22 @@ _See also: _`record_expr/3`.
 
 record_expr_type(Node) ->
     case unwrap(Node) of
-	{record, Pos, Type, _} ->
-	    set_pos(atom(Type), Pos);
-	{record, Pos, _, Type, _} ->
-	    set_pos(atom(Type), Pos);
-	Node1 ->
-	    (data(Node1))#record_expr.type
+        {record, Pos, {Mod, Name}, _} ->
+            list([set_pos(atom(Mod), Pos), set_pos(atom(Name), Pos)]);
+        {record, Pos, [], _} ->
+            set_pos(atom('_'), Pos);
+        {record_field, Pos, _, Name, _} ->
+           set_pos(atom(Name), Pos);
+        {record, Pos, Type, _} ->
+            set_pos(atom(Type), Pos);
+        {record, Pos, _, {Mod, Name}, _} ->
+            list([set_pos(atom(Mod), Pos), set_pos(atom(Name), Pos)]);
+        {record, Pos, _, [], _} ->
+            set_pos(atom('_'), Pos);
+        {record, Pos, _, Type, _} ->
+            set_pos(atom(Type), Pos);
+        Node1 ->
+            (data(Node1))#record_expr.type
     end.
 
 
@@ -5632,7 +5699,7 @@ typed_record_field_type(Node) ->
 
 %% =====================================================================
 
--record(list_comp, {template :: syntaxTree(), body :: [syntaxTree()]}).
+-record(list_comp, {template :: syntaxTree() | [syntaxTree()], body :: [syntaxTree()]}).
 
 -doc """
 Creates an abstract list comprehension.
@@ -5640,9 +5707,12 @@ Creates an abstract list comprehension.
 If `Body` is `[E1, ..., En]`, the result represents "`[Template ||
 E1, ..., En]`".
 
+Supports comprehensions with multiple emitted elements per iteration,
+from EEP 78 - in such cases, `Template` is a list of expressions.
+
 _See also: _`generator/2`, `list_comp_body/1`, `list_comp_template/1`.
 """.
--spec list_comp(syntaxTree(), [syntaxTree()]) -> syntaxTree().
+-spec list_comp(syntaxTree() | [syntaxTree()], [syntaxTree()]) -> syntaxTree().
 
 %% `erl_parse' representation:
 %%
@@ -5664,9 +5734,12 @@ revert_list_comp(Node) ->
 -doc """
 Returns the template subtree of a `list_comp` node.
 
+Supports comprehensions with multiple emitted elements per iteration,
+from EEP 78 - in such cases, template will be a list of expressions.
+
 _See also: _`list_comp/2`.
 """.
--spec list_comp_template(syntaxTree()) -> syntaxTree().
+-spec list_comp_template(syntaxTree()) -> syntaxTree() | [syntaxTree()].
 
 list_comp_template(Node) ->
     case unwrap(Node) of
@@ -5756,7 +5829,7 @@ binary_comp_body(Node) ->
 
 %% =====================================================================
 
--record(map_comp, {template :: syntaxTree(), body :: [syntaxTree()]}).
+-record(map_comp, {template :: syntaxTree() | [syntaxTree()], body :: [syntaxTree()]}).
 
 -doc """
 Creates an abstract map comprehension.
@@ -5764,9 +5837,12 @@ Creates an abstract map comprehension.
 If `Body` is `[E1, ..., En]`, the result represents "`#{Template ||
 E1, ..., En}`".
 
+Supports comprehensions with multiple emitted elements per iteration,
+from EEP 78 - in such cases, `Template` is a list of key-value associations.
+
 _See also: _`generator/2`, `map_comp_body/1`, `map_comp_template/1`.
 """.
--spec map_comp(syntaxTree(), [syntaxTree()]) -> syntaxTree().
+-spec map_comp(syntaxTree() | [syntaxTree()], [syntaxTree()]) -> syntaxTree().
 
 %% `erl_parse' representation:
 %%
@@ -5788,9 +5864,12 @@ revert_map_comp(Node) ->
 -doc """
 Returns the template subtree of a `map_comp` node.
 
+Supports comprehensions with multiple emitted elements per iteration,
+from EEP 78 - in such cases, template will be list of key-value associations.
+
 _See also: _`map_comp/2`.
 """.
--spec map_comp_template(syntaxTree()) -> syntaxTree().
+-spec map_comp_template(syntaxTree()) -> syntaxTree() | [syntaxTree()].
 
 map_comp_template(Node) ->
     case unwrap(Node) of
@@ -7451,16 +7530,26 @@ is_literal(T) ->
     end.
 
 is_literal_binary_field(F) ->
+    case is_literal_binary_field_type(F) of
+        true ->
+            B = binary_field_body(F),
+            case type(B) of
+                size_qualifier ->
+                    is_literal(size_qualifier_body(B)) andalso
+                        is_literal(size_qualifier_argument(B));
+                _ ->
+                    is_literal(B)
+            end;
+        false ->
+            false
+    end.
+
+is_literal_binary_field_type(F) ->
     case binary_field_types(F) of
-	[] -> B = binary_field_body(F),
-              case type(B) of
-                  size_qualifier ->
-                      is_literal(size_qualifier_body(B)) andalso
-                          is_literal(size_qualifier_argument(B));
-                  _ ->
-                      is_literal(B)
-              end;
-	_  -> false
+        [] ->
+            true;
+        [Type] ->
+            is_literal(Type) andalso concrete(Type) =:= utf8
     end.
 
 is_literal_map_field(F) ->
@@ -7893,7 +7982,12 @@ subtrees(T) ->
 			    [list_prefix(T), [S]]
 		    end;
 		list_comp ->
-		    [[list_comp_template(T)], list_comp_body(T)];
+                    case list_comp_template(T) of
+                        Exprs when is_list(Exprs) ->
+                            [Exprs, list_comp_body(T)];
+                        Expr ->
+                            [[Expr], list_comp_body(T)]
+                    end;
 		macro ->
 		    case macro_arguments(T) of
 			none ->
@@ -7902,7 +7996,12 @@ subtrees(T) ->
 			    [[macro_name(T)], As]
 		    end;
                 map_comp ->
-                    [[map_comp_template(T)], map_comp_body(T)];
+                    case map_comp_template(T) of
+                        Exprs when is_list(Exprs) ->
+                            [Exprs, map_comp_body(T)];
+                        Expr ->
+                            [[Expr], map_comp_body(T)]
+                    end;
                 map_expr ->
                     case map_expr_argument(T) of
                         none ->
@@ -7975,13 +8074,17 @@ subtrees(T) ->
                      [record_access_type(T)],
                      [record_access_field(T)]];
 		record_expr ->
+		    Type = case type(record_expr_type(T)) of
+			       atom -> [record_expr_type(T)];
+			       list -> list_elements(record_expr_type(T))
+			   end,
 		    case record_expr_argument(T) of
 			none ->
-			    [[record_expr_type(T)],
+			    [Type,
 			     record_expr_fields(T)];
 			V ->
 			    [[V],
-			     [record_expr_type(T)],
+			     Type,
 			     record_expr_fields(T)]
 		    end;
 		record_field ->
@@ -8102,9 +8205,11 @@ make_tree(integer_range_type, [[L],[H]]) -> integer_range_type(L, H);
 make_tree(list, [P]) -> list(P);
 make_tree(list, [P, [S]]) -> list(P, S);
 make_tree(list_comp, [[T], B]) -> list_comp(T, B);
+make_tree(list_comp, [Ts, B]) -> list_comp(Ts, B);
 make_tree(macro, [[N]]) -> macro(N);
 make_tree(macro, [[N], A]) -> macro(N, A);
 make_tree(map_comp, [[T], B]) -> map_comp(T, B);
+make_tree(map_comp, [Ts, B]) -> map_comp(Ts, B);
 make_tree(map_expr, [Fs]) -> map_expr(Fs);
 make_tree(map_expr, [[E], Fs]) -> map_expr(E, Fs);
 make_tree(map_field_assoc, [[K], [V]]) -> map_field_assoc(K, V);
@@ -8129,7 +8234,9 @@ make_tree(receive_expr, [C, [E], A]) -> receive_expr(C, E, A);
 make_tree(record_access, [[E], [T], [F]]) ->
     record_access(E, T, F);
 make_tree(record_expr, [[T], F]) -> record_expr(T, F);
+make_tree(record_expr, [[M, D], F]) -> record_expr([M, D], F);
 make_tree(record_expr, [[E], [T], F]) -> record_expr(E, T, F);
+make_tree(record_expr, [[E], [M, D], F]) -> record_expr(E, [M, D], F);
 make_tree(record_field, [[N]]) -> record_field(N);
 make_tree(record_field, [[N], [E]]) -> record_field(N, E);
 make_tree(record_index_expr, [[T], [F]]) ->
@@ -8458,7 +8565,7 @@ fold_function_names(Ns) ->
 fold_function_name(N) ->
     Name = arity_qualifier_body(N),
     Arity = arity_qualifier_argument(N),
-    true = ((type(Name) =:= atom) and (type(Arity) =:= integer)),
+    true = type(Name) =:= atom andalso type(Arity) =:= integer,
     {concrete(Name), concrete(Arity)}.
 
 fold_variable_names(Vs) ->

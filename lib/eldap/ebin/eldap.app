@@ -8,7 +8,7 @@
 %% %CopyrightEnd%
 {application, eldap,
  [{description, "Ldap api"},
-  {vsn, "1.2.16"},
+  {vsn, "1.3"},
   {modules, [eldap, 'ELDAPv3']},
   {registered, []},
   {applications, [kernel, stdlib, asn1]},

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2019-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2019-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -100,14 +100,15 @@ will_succeed(erlang, 'bsl'=Op, [LHS, RHS]=Args) ->
 will_succeed(erlang, '++', [LHS, _RHS]) ->
     succeeds_if_type(LHS, proper_list());
 will_succeed(erlang, '--', [_, _] = Args) ->
-    succeeds_if_types(Args, proper_list());
+    succeeds_if_types(Args, [proper_list(), proper_list()]);
 will_succeed(erlang, BoolOp, [_, _] = Args) when BoolOp =:= 'and';
                                                  BoolOp =:= 'or' ->
-    succeeds_if_types(Args, beam_types:make_boolean());
+    Bool = beam_types:make_boolean(),
+    succeeds_if_types(Args, [Bool, Bool]);
 will_succeed(erlang, Op, [_, _] = Args) when Op =:= 'band';
                                              Op =:= 'bor';
                                              Op =:= 'bxor' ->
-    succeeds_if_types(Args, #t_integer{});
+    succeeds_if_types(Args, [#t_integer{}, #t_integer{}]);
 will_succeed(erlang, bit_size, [Arg]) ->
     succeeds_if_type(Arg, #t_bs_matchable{});
 will_succeed(erlang, byte_size, [Arg]) ->
@@ -144,13 +145,18 @@ will_succeed(erlang, map_size, [Arg]) ->
 will_succeed(erlang, node, [Arg]) ->
     succeeds_if_type(Arg, identifier);
 will_succeed(erlang, 'and', [_, _]=Args) ->
-    succeeds_if_types(Args, beam_types:make_boolean());
+    Bool = beam_types:make_boolean(),
+    succeeds_if_types(Args, [Bool, Bool]);
 will_succeed(erlang, 'not', [Arg]) ->
     succeeds_if_type(Arg, beam_types:make_boolean());
 will_succeed(erlang, 'or', [_, _]=Args) ->
-    succeeds_if_types(Args, beam_types:make_boolean());
+    Bool = beam_types:make_boolean(),
+    succeeds_if_types(Args, [Bool, Bool]);
 will_succeed(erlang, 'xor', [_, _]=Args) ->
-    succeeds_if_types(Args, beam_types:make_boolean());
+    Bool = beam_types:make_boolean(),
+    succeeds_if_types(Args, [Bool, Bool]);
+will_succeed(erlang, 'is_integer', [_, _, _]=Args) ->
+    succeeds_if_types(Args, [any, #t_integer{}, #t_integer{}]);
 will_succeed(erlang, setelement, [Pos, Tuple0, _Value]=Args) ->
     PosRange = #t_integer{elements={1,?MAX_TUPLE_SIZE}},
     case {meet(Pos, PosRange), meet(Tuple0, #t_tuple{size=1})} of
@@ -231,14 +237,20 @@ fails_on_conflict_1([ArgType | Args], [Required | Types]) ->
 fails_on_conflict_1([], []) ->
     'maybe'.
 
-succeeds_if_types([LHS, RHS], Required) ->
-    case {succeeds_if_type(LHS, Required),
-          succeeds_if_type(RHS, Required)} of
-        {yes, yes} -> yes;
-        {no, _} -> no;
-        {_, no} -> no;
-        {_, _} -> 'maybe'
-    end.
+succeeds_if_types(Ts, Rs) ->
+    succeeds_if_types_1(Ts, Rs, yes).
+
+succeeds_if_types_1([T | Ts], [R | Rs], Acc) ->
+    case succeeds_if_type(T, R) of
+        yes when Acc =:= yes ->
+            succeeds_if_types_1(Ts, Rs, Acc);
+        no ->
+            no;
+        _ ->
+            succeeds_if_types_1(Ts, Rs, 'maybe')
+    end;
+succeeds_if_types_1([], [], Acc) ->
+    Acc.
 
 succeeds_if_type(ArgType, Required) ->
     case meet(ArgType, Required) of
@@ -396,6 +408,8 @@ types(erlang, is_function, [Type]) ->
     sub_unsafe_type_test(Type, #t_fun{});
 types(erlang, is_integer, [Type]) ->
     sub_unsafe_type_test(Type, #t_integer{});
+types(erlang, is_integer, [_Term, _LB, _UB]) ->
+    sub_unsafe(beam_types:make_boolean(), [any, #t_integer{}, #t_integer{}]);
 types(erlang, is_list, [Type]) ->
     sub_unsafe_type_test(Type, #t_list{});
 types(erlang, is_map, [Type]) ->
@@ -406,6 +420,43 @@ types(erlang, is_pid, [Type]) ->
     sub_unsafe_type_test(Type, pid);
 types(erlang, is_port, [Type]) ->
     sub_unsafe_type_test(Type, port);
+types(erlang, is_record, [Type]) ->
+    sub_unsafe_type_test(Type, #t_record{});
+types(erlang, is_record, [Type,Mod0,Name0]=Args) ->
+    case {Mod0,Name0} of
+        {#t_atom{elements=[Mod]},
+         #t_atom{elements=[Name]}} ->
+            %% We KNOW that this is_record/3 test is always preceeded
+            %% by an is_record/1 test. Therefore, `Type` is always a
+            %% record or a record set.
+            RetType =
+                case meet(Type, #t_record{}) of
+                    #t_record{name=Id} ->
+                        case Id of
+                            {Mod,Name} ->
+                                #t_atom{elements=[true]};
+                            {_,_} ->
+                                #t_atom{elements=[false]};
+                            nil ->
+                                beam_types:make_boolean()
+                        end;
+                    #t_union{native_record_set=Recs} ->
+                        case any(fun(#t_record{name=Id}) ->
+                                         case Id of
+                                             {Mod,Name} -> true;
+                                             {_,_} -> false
+                                         end
+                                 end, Recs) of
+                            false ->
+                                #t_atom{elements=[false]};
+                            true ->
+                                beam_types:make_boolean()
+                        end
+                end,
+            sub_unsafe(RetType, Args);
+        {_, _} ->
+            sub_unsafe(beam_types:make_boolean(), Args)
+    end;
 types(erlang, is_reference, [Type]) ->
     sub_unsafe_type_test(Type, reference);
 types(erlang, is_tuple, [Type]) ->

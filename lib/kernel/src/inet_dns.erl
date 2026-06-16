@@ -213,12 +213,13 @@ do_decode_reply(
     QdBuf/binary>> = Buffer,
   Q_H, Q_RR, Id, Mdns) ->
     %%
-    (H_QR = decode_boolean(QR))
+    H_QR = decode_boolean(QR),
+    H_QR orelse throw(unknown),
+    H_Opcode = decode_opcode(Opcode),
+    H_Opcode =:= Q_H#dns_header.opcode
         orelse throw(unknown),
-    (H_Opcode = decode_opcode(Opcode)) =:= Q_H#dns_header.opcode
-        orelse throw(unknown),
-    (H_RD = decode_boolean(RD)) andalso not Q_H#dns_header.rd
-        andalso throw(unknown),
+    H_RD = decode_boolean(RD),
+    H_RD andalso not Q_H#dns_header.rd andalso throw(unknown),
     %%
     QdCount == 1
         orelse throw(noquery),
@@ -464,7 +465,7 @@ encode_res_section_rr(
   Bin0, {Opcode,Mdns} = Opts, Comp0, Rs,
   DName, Type, Class, CacheFlush, TTL, Data) ->
     T = encode_type(Type),
-    C = encode_class(Class, Mdns and CacheFlush),
+    C = encode_class(Class, Mdns andalso CacheFlush),
     {Bin,Comp1} = encode_name(Bin0, Comp0, byte_size(Bin0), DName),
     Pos = byte_size(Bin)+2+2+byte_size(TTL)+2,
     {DataBin,Comp} = encode_data(Comp1, Pos, Type, Class, Data, Opcode),

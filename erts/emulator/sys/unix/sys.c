@@ -926,7 +926,7 @@ void erts_do_break_handling(void)
 }
 
 
-/* Fills in the systems representation of the jam/beam process identifier.
+/* Fills in the systems representation of the Beam process identifier.
 ** The Pid is put in STRING representation in the supplied buffer,
 ** no interpretatione of this should be done by the rest of the
 ** emulator. The buffer should be at least 21 bytes long.
@@ -1134,17 +1134,7 @@ signal_dispatcher_thread_func(void *unused)
         do {
             res = read(sig_notify_fds[0], (void *) &sb.buf[i], sizeof(int) - i);
             i += res > 0 ? res : 0;
-#ifdef __EMSCRIPTEN__
-            /* Emscripten pipes are non-blocking: poll every 50ms instead of
-               aborting on EAGAIN (no real OS signals are delivered here). */
-            if (res < 0 && errno == EAGAIN) usleep(50000);
-#endif
-        } while ((i < sizeof(int) && res >= 0) ||
-                 (res < 0 && (errno == EINTR
-#ifdef __EMSCRIPTEN__
-                              || errno == EAGAIN
-#endif
-                 )));
+        } while ((i < sizeof(int) && res >= 0) || (res < 0 && errno == EINTR));
 
 	if (res < 0) {
 	    erts_exit(ERTS_ABORT_EXIT,
@@ -1202,10 +1192,6 @@ init_smp_sig_notify(void)
 		 erl_errno_id(errno),
 		 errno);
     }
-
-    if (erts_single_threaded)
-        return; /* no OS threads in single-threaded mode; OS signals are not
-                 * dispatched (irrelevant for the wasm worker). See erl_init.c. */
 
     /* Start signal handler thread */
     erts_thr_create(&sig_dispatcher_tid,

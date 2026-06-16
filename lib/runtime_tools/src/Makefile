@@ -76,7 +76,7 @@ ERL_COMPILE_FLAGS += \
 	-I../include \
 	-I ../../et/include \
 	-I ../../../libraries/et/include \
-	-Werror
+	-Werror +nowarn_deprecated_catch
 
 # ----------------------------------------------------
 # Targets
@@ -112,3 +112,8 @@ release_spec: opt
 release_docs_spec:
 	$(INSTALL_DIR) "$(RELSYSDIR)/doc/examples"
 	$(INSTALL_DATA) $(EXAMPLE_FILES) "$(RELSYSDIR)/doc/examples"
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

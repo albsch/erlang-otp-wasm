@@ -86,6 +86,12 @@ in the description of each individual BIF.
            "use the new try/catch syntax for retrieving the "
            "stack backtrace"}]).
 
+-unsafe([{list_to_atom, 1, possibly},
+         {binary_to_atom, '_', possibly},
+         {binary_to_term, '_', possibly}]).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_atom, 2}}]).
+
 %% Get rid of autoimports of spawn to avoid clashes with ourselves.
 -compile({no_auto_import,[spawn_link/1]}).
 -compile({no_auto_import,[spawn_link/4]}).
@@ -102,7 +108,7 @@ in the description of each individual BIF.
 %% Built-in datatypes
 -doc "All possible Erlang terms. Synonym for `t:term/0`.".
 -type any() :: any().
--doc "The arity of a function or type.".
+-doc "The arity of a function, type or callback.".
 -type arity() :: arity().
 -doc "An Erlang [atom](`e:system:data_types.md#atom`).".
 -type atom() :: atom().
@@ -231,6 +237,8 @@ that contains some items.
 -type port() :: port().
 -doc "An integer greater than zero.".
 -type pos_integer() :: pos_integer().
+-doc "A [native record](`e:system:data_types.md#native-record`).".
+-type record() :: record().
 -doc "An Erlang [reference](`e:system:data_types.md#reference`).".
 -type reference() :: reference().
 -doc """
@@ -254,8 +262,8 @@ A timeout value that can be passed to a
               none/0, nonempty_binary/0, nonempty_bitstring/0, nonempty_improper_list/2,
               nonempty_list/0, nonempty_list/1, nonempty_maybe_improper_list/0,
               nonempty_maybe_improper_list/2, nonempty_string/0, number/0, pid/0,
-              port/0, pos_integer/0, reference/0, string/0, term/0, timeout/0,
-              tuple/0]).
+              port/0, pos_integer/0, record/0, reference/0, string/0, term/0,
+              timeout/0, tuple/0]).
 
 %% Datatypes that need an erlang: prefix
 -export_type([timestamp/0]).
@@ -435,7 +443,7 @@ A list of binaries. This datatype is useful to use together with
 -export([delete_module/1, demonitor/1, demonitor/2, display/1]).
 -export([display_string/1, display_string/2, erase/0, erase/1]).
 -export([error/1, error/2, error/3, exit/1, exit/2, exit/3,
-         exit_signal/2, external_size/1]).
+         exit_signal/2, exit_signal/3, external_size/1]).
 -export([external_size/2, finish_after_on_load/2, finish_loading/1, float/1]).
 -export([float_to_binary/1, float_to_binary/2,
 	 float_to_list/1, float_to_list/2, floor/1]).
@@ -485,9 +493,9 @@ A list of binaries. This datatype is useful to use together with
 
 -export([abs/1, append/2, element/2, get_module_info/2, hd/1,
          is_atom/1, is_binary/1, is_bitstring/1, is_boolean/1,
-         is_float/1, is_function/1, is_function/2, is_integer/1,
-         is_list/1, is_map/1, is_number/1, is_pid/1, is_port/1, is_record/2,
-         is_record/3, is_reference/1, is_tuple/1, load_module/2,
+         is_float/1, is_function/1, is_function/2, is_integer/1, is_integer/3,
+         is_list/1, is_map/1, is_number/1, is_pid/1, is_port/1, is_record/1,
+         is_record/2, is_record/3, is_reference/1, is_tuple/1, load_module/2,
          load_nif/2, localtime_to_universaltime/2, make_fun/3,
          make_tuple/2, make_tuple/3, open_port/2,
          port_call/2, port_call/3, port_info/1, port_info/2, process_flag/2,
@@ -646,7 +654,18 @@ A extended `t:stacktrace/0` that can be passed to `raise/3`.
 
 %% Specs and stubs
 %% adler32/1
--doc "Computes and returns the adler32 checksum for `Data`.".
+-doc """
+Computes and returns the adler32 checksum for `Data`.
+
+## Examples
+
+```erlang
+1> Data = ~"abc".
+2> erlang:adler32(Data).
+38600999
+```
+
+""".
 -doc #{ category => checksum }.
 -spec adler32(Data) -> non_neg_integer() when
       Data :: iodata().
@@ -661,14 +680,19 @@ Continues computing the adler32 checksum by combining the previous checksum,
 The following code:
 
 ```erlang
-X = erlang:adler32(Data1),
-Y = erlang:adler32(X,Data2).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:adler32(Data1).
+38600999
+3> Y = erlang:adler32(X,Data2).
+136184406
 ```
 
 assigns the same value to `Y` as this:
 
 ```erlang
-Y = erlang:adler32([Data1,Data2]).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> Y = erlang:adler32([Data1,Data2]).
+136184406
 ```
 """.
 -doc #{ category => checksum }.
@@ -688,16 +712,23 @@ to be known.
 The following code:
 
 ```erlang
-Y = erlang:adler32(Data1),
-Z = erlang:adler32(Y,Data2).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:adler32(Data1).
+38600999
+3> Z = erlang:adler32(X,Data2).
+136184406
 ```
 
 assigns the same value to `Z` as this:
 
 ```erlang
-X = erlang:adler32(Data1),
-Y = erlang:adler32(Data2),
-Z = erlang:adler32_combine(X,Y,iolist_size(Data2)).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:adler32(Data1).
+38600999
+3> Y = erlang:adler32(Data2).
+39780656
+4> Z = erlang:adler32_combine(X,Y,iolist_size(Data2)).
+136184406
 ```
 """.
 -doc #{ category => checksum }.
@@ -1448,7 +1479,7 @@ call_on_load_function(_P1) ->
 
 %% cancel_timer/1
 -doc( #{ equiv =>  erlang:cancel_timer(TimerRef, []) }).
--doc #{ category => time }.
+-doc #{ category => timer }.
 -spec cancel_timer(TimerRef) -> Result when
       TimerRef :: reference(),
       Time :: non_neg_integer(),
@@ -1509,7 +1540,7 @@ See also [`erlang:send_after/4`](`send_after/4`),
 [`erlang:read_timer/2`](`read_timer/2`).
 """.
 -doc(#{since => <<"OTP 18.0">>}).
--doc #{ category => time }.
+-doc #{ category => timer }.
 -spec cancel_timer(TimerRef, Options) -> Result | ok when
       TimerRef :: reference(),
       Async :: boolean(),
@@ -1659,7 +1690,17 @@ check_process_code(Pid, Module, OptionList)  ->
     end.
 
 %% crc32/1
--doc "Computes and returns the crc32 (IEEE 802.3 style) checksum for `Data`.".
+-doc """
+Computes and returns the crc32 (IEEE 802.3 style) checksum for `Data`.
+
+## Examples:
+
+```erlang
+1> Data = ~"abc".
+2> erlang:crc32(Data).
+891568578
+```
+""".
 -doc #{ category => checksum }.
 -spec crc32(Data) -> non_neg_integer() when
       Data :: iodata().
@@ -1674,14 +1715,19 @@ Continues computing the crc32 checksum by combining the previous checksum,
 The following code:
 
 ```erlang
-X = erlang:crc32(Data1),
-Y = erlang:crc32(X,Data2).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:crc32(Data1).
+891568578
+3> Y = erlang:crc32(X,Data2).
+1267612143
 ```
 
 assigns the same value to `Y` as this:
 
 ```erlang
-Y = erlang:crc32([Data1,Data2]).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> Y = erlang:crc32([Data1,Data2]).
+1267612143
 ```
 """.
 -doc #{ category => checksum }.
@@ -1701,16 +1747,23 @@ to be known.
 The following code:
 
 ```erlang
-Y = erlang:crc32(Data1),
-Z = erlang:crc32(Y,Data2).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:crc32(Data1).
+891568578
+3> Y = erlang:crc32(X,Data2).
+1267612143
 ```
 
 assigns the same value to `Z` as this:
 
 ```erlang
-X = erlang:crc32(Data1),
-Y = erlang:crc32(Data2),
-Z = erlang:crc32_combine(X,Y,iolist_size(Data2)).
+1> Data1 = ~"abc", Data2 = ~"def".
+2> X = erlang:crc32(Data1).
+891568578
+3> Y = erlang:crc32(Data2).
+214229345
+4> Z = erlang:crc32_combine(X,Y,iolist_size(Data2)).
+1267612143
 ```
 """.
 -doc #{ category => checksum }.
@@ -2206,7 +2259,7 @@ display_string(String) ->
 -doc false.
 -spec display_string(Device, P1) -> true when
       Device :: stdin | stdout | stderr,
-      P1 :: string().
+      P1 :: string() | binary().
 display_string(_Stream,_P1) ->
     erlang:nif_error(undefined).
 
@@ -2266,9 +2319,9 @@ Returns the process dictionary and deletes it.
 For example:
 
 ```erlang
-> put(key1, {1, 2, 3}),
-put(key2, [a, b, c]),
-erase().
+1> put(key1, {1, 2, 3}).
+2> put(key2, [a, b, c]).
+3> lists:sort(erase()).
 [{key1,{1,2,3}},{key2,[a,b,c]}]
 ```
 """.
@@ -2291,10 +2344,11 @@ items in the process dictionary.
 For example:
 
 ```erlang
-> put(key1, {merry, lambs, are, playing}),
-X = erase(key1),
-{X, erase(key1)}.
-{{merry,lambs,are,playing},undefined}
+1> put(key1, {merry, lambs, are, playing}).
+2> X = erase(key1).
+{merry,lambs,are,playing}
+3> erase(key1).
+undefined
 ```
 """.
 -doc #{ category => processes }.
@@ -2318,14 +2372,8 @@ incorrect type). See the guide about
 Example:
 
 ```erlang
-> catch error(foobar).
-{'EXIT',{foobar,[{shell,apply_fun,3,
-                        [{file,"shell.erl"},{line,906}]},
-                 {erl_eval,do_apply,6,[{file,"erl_eval.erl"},{line,677}]},
-                 {erl_eval,expr,5,[{file,"erl_eval.erl"},{line,430}]},
-                 {shell,exprs,7,[{file,"shell.erl"},{line,687}]},
-                 {shell,eval_exprs,7,[{file,"shell.erl"},{line,642}]},
-                 {shell,eval_loop,3,[{file,"shell.erl"},{line,627}]}]}}
+1> catch error(foobar).
+{'EXIT',{foobar, _StackTrace}}
 ```
 """.
 -doc #{ category => processes }.
@@ -2365,13 +2413,11 @@ example_fun(A1, A2) ->
 
 Erlang shell:
 
-```text
-1> c(test).
-{ok,test}
-2> test:example_fun(arg1, "this is the second argument").
+```erlang
+1> test:example_fun(arg1, "this is the second argument").
 ** exception error: my_error
      in function  test:example_fun/2
-         called as test:example_fun(arg1,"this is the second argument")
+        called as test:example_fun(arg1,"this is the second argument")
 ```
 """.
 -spec error(Reason, Args) -> no_return() when
@@ -2441,9 +2487,9 @@ additional information.
 Example:
 
 ```erlang
-> exit(foobar).
+1> exit(foobar).
 ** exception exit: foobar
-> catch exit(foobar).
+2> catch exit(foobar).
 {'EXIT',foobar}
 ```
 
@@ -2455,7 +2501,7 @@ Example:
 > exit reason `kill` can be trapped by the linked processes. Note that this
 > means that signals with exit reason `kill` behave differently depending on how
 > they are sent because the signal will be untrappable if a process sends such a
-> signal to another process with [`erlang:exit/2`](`exit/2`).
+> signal to another process with [`erlang:exit_signal/2`](`exit_signal/2`).
 """.
 -doc #{ category => processes }.
 -spec exit(Reason) -> no_return() when
@@ -2463,7 +2509,7 @@ Example:
 exit(_Reason) ->
     erlang:nif_error(undefined).
 
-%% exit/2
+%% exit_signal/2
 -doc """
 Sends an exit signal with exit reason `Reason` to the process or port identified
 by `Dest`. If `Dest` is a reference, the exit signal will *only* affect the
@@ -2471,8 +2517,8 @@ identified process if the reference is an active
 [process alias](`e:system:ref_man_processes.md#process-aliases`) of a process
 executing on an OTP 28.0 node or newer.
 
-The following behavior applies if `Reason` is any term, except `normal` or
-`kill`, and `P` is the process or port identified by `Dest`:
+Let `P` be the process or port identified by `Dest`. The following behavior
+applies if `Reason` is any term except `normal` or `kill`:
 
 - If `P` is not [trapping exits](`process_flag/2`), `P` exits with exit reason
   `Reason`.
@@ -2481,47 +2527,19 @@ The following behavior applies if `Reason` is any term, except `normal` or
   identifier of the process that sent the exit signal, and delivered to the
   message queue of `P`.
 
-The following behavior applies if `Reason` is the term `normal` and `Dest` is the
-identifier of a process `P` which is not the same as the process that invoked
-`erlang:exit(Dest, normal)` (the behavior when a process sends a signal with the
-`normal` reason to itself is described in the warning):
+The following behavior applies if `Reason` is the term `normal`:
 
+- The signal has no effect if `P` is not trapping exits.
 - If `P` is [trapping exits](`process_flag/2`), the exit signal is transformed
   into a message `{'EXIT', From, normal}`, where `From` is the process
   identifier of the process that sent the exit signal, and delivered to `P`'s
   message queue.
-- The signal has no effect if `P` is not trapping exits.
 
-If `Reason` is the atom `kill`, that is, if [`exit(Dest, kill)`](`exit/2`) is
+If `Reason` is the atom `kill`, that is, if [`exit(Dest, kill)`](`exit_signal/2`) is
 called, an untrappable exit signal is sent to the process that is identified by
 `Dest`, which unconditionally exits with exit reason `killed`. The exit reason is
 changed from `kill` to `killed` to hint to linked processes that the killed
-process got killed by a call to [`exit(Dest, kill)`](`exit/2`).
-
-> #### Note {: .info }
->
-> The functions [`erlang:exit/1`](`exit/1`) and [`erlang:exit/2`](`exit/2`) are
-> named similarly but provide very different functionalities. The
-> `erlang:exit/1` function should be used when the intent is to stop the current
-> process while `erlang:exit/2` should be used when the intent is to send an
-> exit signal to another process. Note also that `erlang:exit/1` raises an
-> exception that can be caught while `erlang:exit/2` does not cause any
-> exception to be raised.
-
-> #### Warning {: .warning }
->
-> The only scenario that has not been covered by the description above is when a
-> process `P` sends an exit signal with reason `normal` to itself, that is
-> `erlang:exit(self(), normal)`. The behavior in this scenario is as follows:
->
-> - If `P` is [trapping exits](`process_flag/2`), the exit signal is transformed
->   into a message `{'EXIT', From, normal}`, where `From` is `P`'s process
->   identifier, and delivered to `P`'s message queue.
-> - `P` exits with reason `normal` if `P` is not trapping exits.
->
-> Note that the behavior described above is different from when a process sends
-> an exit signal with reason `normal` to another process. This is arguably
-> strange but this behavior is kept for backward compatibility reasons.
+process got killed by a call to [`exit(Dest, kill)`](`exit_signal/2`).
 
 > #### Note {: .info }
 >
@@ -2529,19 +2547,57 @@ process got killed by a call to [`exit(Dest, kill)`](`exit/2`).
 > [_Blocking Signaling Over Distribution_](`e:system:ref_man_processes.md#blocking-signaling-over-distribution`)
 > section in the _Processes_ chapter of the _Erlang Reference Manual_.
 """.
-
 -doc #{ category => processes }.
+-doc(#{since => <<"OTP 29.0">>}).
+-spec exit_signal(Pid, Reason) -> true when
+      Pid :: pid() | port() | reference(),
+      Reason :: term().
+exit_signal(_Pid, _Reason) ->
+    erlang:nif_error(undefined).
+
+%% exit/2
+-doc """
+Old form of `exit_signal/2`, with a quirk when sender and receiver are the same.
+
+> #### Note {: .info }
+>
+> The function [`erlang:exit/2`](`exit/2`) is named similarly to [`erlang:exit/1`](`exit/1`)
+> but provides very different functionality. The `erlang:exit/1` function should be used
+> when the intent is to stop the current process by raising an exception of class `exit`.
+
+> The `erlang:exit_signal/2` function, or the old form `erlang:exit/2`, should be used
+> when the intent is to send an exit signal to another process. Note also that
+> `erlang:exit/1` raises an exception that can be caught, while `erlang:exit_signal/2`
+> does not cause any exception to be raised.
+
+> #### Warning {: .warning }
+>
+> This function has a quirk: When a process `P` sends an exit signal with reason `normal`
+> to itself using this function, that is, `erlang:exit(self(), normal)`, the behavior is
+> as follows:
+>
+> - `P` exits with reason `normal` if `P` is not trapping exits.
+> - If `P` is [trapping exits](`process_flag/2`), the exit signal is transformed
+>   into a message `{'EXIT', From, normal}`, where `From` is `P`'s process
+>   identifier, and delivered to `P`'s message queue.
+>
+> Note that this differs from when a process sends an exit signal with reason `normal`
+> to another process than itself (see `exit_signal/2` for details). This behavior is kept
+> for backward compatibility reasons. Use `exit_signal/2` for new code.
+""".
+-doc #{ category => processes }.
+-doc #{ category => deprecated }.
 -spec exit(Dest, Reason) -> true when
       Dest :: pid() | port() | reference(),
       Reason :: term().
 exit(_Dest, _Reason) ->
     erlang:nif_error(undefined).
 
-%% exit/3
+%% exit_signal/3
 -doc """
 Provides an option list for modification of the functionality provided by the
-`exit/2` BIF. The `Dest` and `Reason` arguments has the same meaning as when
-passed to the `exit/2` BIF.
+`exit_signal/2` BIF. The `Dest` and `Reason` arguments has the same meaning as when
+passed to `exit_signal/2`.
 
 Currently available options:
 
@@ -2569,24 +2625,32 @@ Currently available options:
   and the
   [Enabling Priority Message Reception](`e:system:ref_man_processes.md#enable-prio-msg-recv`)
   sections of the _Erlang Reference Manual_.
-
 """.
+-doc #{ category => processes }.
+-doc(#{since => <<"OTP 29.0">>}).
+-spec exit_signal(Dest, Reason, OptList) -> true when
+      Dest :: pid() | port() | reference(),
+      Reason :: term(),
+      OptList :: [priority].
+exit_signal(_Pid, _Reason, _OptList) ->
+    erlang:nif_error(undefined).
 
+%% exit/3
+-doc """
+Deprecated form of `exit_signal/3`, with a quirk when sender and receiver are the same.
+
+This allows passing options to `exit/2`, which preserves the behavior when a process `P`
+sends an exit signal with reason `normal` to itself; see `exit/2` for details. For new
+code, use `exit_signal/3`.
+""".
 -doc #{ category => processes }.
 -doc(#{since => <<"OTP 28.0">>}).
+-doc #{ category => deprecated }.
 -spec exit(Dest, Reason, OptList) -> true when
       Dest :: pid() | port() | reference(),
       Reason :: term(),
       OptList :: [priority].
 exit(_Pid, _Reason, _OptList) ->
-    erlang:nif_error(undefined).
-
-%% exit_signal/2
--doc false.
--spec exit_signal(Pid, Reason) -> true when
-      Pid :: pid() | port() | reference(),
-      Reason :: term().
-exit_signal(_Pid, _Reason) ->
     erlang:nif_error(undefined).
 
 -doc """
@@ -2596,10 +2660,9 @@ in the Erlang external term format.
 The following condition applies always:
 
 ```erlang
-> Size1 = byte_size(term_to_binary(Term)),
-> Size2 = erlang:external_size(Term),
-> true = Size1 =< Size2.
-true
+Size1 = byte_size(term_to_binary(Term)),
+Size2 = erlang:external_size(Term),
+true = Size1 =< Size2.
 ```
 
 ## Examples
@@ -2626,10 +2689,9 @@ in the Erlang external term format.
 The following condition applies always:
 
 ```erlang
-> Size1 = byte_size(term_to_binary(Term, Options)),
-> Size2 = erlang:external_size(Term, Options),
-> true = Size1 =< Size2.
-true
+Size1 = byte_size(term_to_binary(Term, Options)),
+Size2 = erlang:external_size(Term, Options),
+true = Size1 =< Size2.
 ```
 
 See `term_to_binary/2` for a description of the options.
@@ -2727,7 +2789,7 @@ decimal point formatting.
 <<"7.12">>
 5> float_to_binary(0.1+0.2, [short]).
 <<"0.30000000000000004">>
-6> float_to_binary(0.1+0.2)
+6> float_to_binary(0.1+0.2).
 <<"3.00000000000000044409e-01">>
 ```
 """.
@@ -2785,7 +2847,7 @@ Available options:
 "7.12"
 5> float_to_list(0.1+0.2, [short]).
 "0.30000000000000004"
-6> float_to_list(0.1+0.2)
+6> float_to_list(0.1+0.2).
 "3.00000000000000044409e-01"
 ```
 
@@ -3102,11 +3164,14 @@ the returned list can be in any order.
 For example:
 
 ```erlang
-> put(key1, merry),
-put(key2, lambs),
-put(key3, {are, playing}),
-get().
+1> put(key1, merry).
+2> put(key2, lambs).
+3> put(key3, {are, playing}).
+4> lists:sort(get()).
 [{key1,merry},{key2,lambs},{key3,{are,playing}}]
+5> erase().
+6> get().
+[]
 ```
 """.
 -doc #{ category => processes }.
@@ -3128,11 +3193,14 @@ items in the process dictionary.
 For example:
 
 ```erlang
-> put(key1, merry),
-put(key2, lambs),
-put({any, [valid, term]}, {are, playing}),
-get({any, [valid, term]}).
+1> put(key1, merry).
+2> put(key2, lambs).
+3> put({any, [valid, term]}, {are, playing}).
+4> get({any, [valid, term]}).
 {are,playing}
+5> erase().
+6> get({any, [valid, term]}).
+undefined
 ```
 """.
 -doc #{ category => processes }.
@@ -3150,11 +3218,14 @@ returned list can be in any order.
 For example:
 
 ```erlang
-> put(dog, {animal,1}),
-put(cow, {animal,2}),
-put(lamb, {animal,3}),
-get_keys().
-[dog,cow,lamb]
+1> put(dog, '🐶').
+2> put(cow, '🐄').
+3> put(lamb, '🐑').
+4> lists:sort(get_keys()).
+[cow,dog,lamb]
+5> erase().
+6> get_keys().
+[]
 ```
 """.
 -doc(#{since => <<"OTP 18.0">>}).
@@ -3172,14 +3243,17 @@ dictionary. The items in the returned list can be in any order.
 For example:
 
 ```erlang
-> put(mary, {1, 2}),
-put(had, {1, 2}),
-put(a, {1, 2}),
-put(little, {1, 2}),
-put(dog, {1, 3}),
-put(lamb, {1, 2}),
-get_keys({1, 2}).
-[mary,had,a,little,lamb]
+1> put(allosaurus, '🦕').
+2> put(brachiosaurus, '🦕').
+3> put(carnotaurus, '🦕').
+4> put(diplodocus, '🦕').
+5> put(euoplocephalus, '🦕').
+6> put(fox, '🦊').
+7> lists:sort(get_keys('🦕')).
+[allosaurus,brachiosaurus,carnotaurus,diplodocus,euoplocephalus]
+8> erase().
+9> get_keys('🦕').
+[]
 ```
 """.
 -doc #{ category => processes }.
@@ -3620,9 +3694,8 @@ If you pass larger binaries, they are split and returned in a form
 optimized for calling the C function `writev()`.
 
 ```erlang
-> erlang:iolist_to_iovec([<<1>>,<<2:8096>>,<<3:8096>>]).
-[<<1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-   0,...>>,
+1> erlang:iolist_to_iovec([<<1>>,<<2:8096>>,<<3:8096>>]).
+[<<1>>,
  <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
    ...>>,
  <<0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,...>>]
@@ -3657,6 +3730,15 @@ This BIF is useful for builders of cross-reference tools.
 
 Returns `true` if `Module:Function/Arity` is a BIF implemented in C, otherwise
 `false`.
+
+## Examples:
+
+```erlang
+1> erlang:is_builtin(lists, keyfind, 3).
+true
+2> erlang:is_builtin(lists, reverse, 1).
+false
+```
 """.
 -doc #{ category => code }.
 -spec is_builtin(Module, Function, Arity) -> boolean() when
@@ -3676,13 +3758,13 @@ Failure: A `{badmap,Map}` exception is raised if `Map` is not a map.
 ## Examples
 
 ```erlang
-> Map = #{"42" => value}.
+1> Map = #{"42" => value}.
 #{"42" => value}
-1> is_map_key("42", Map).
+2> is_map_key("42", Map).
 true
-2> is_map_key(value, Map).
+3> is_map_key(value, Map).
 false
-3> is_map_key(value, no_map).
+4> is_map_key(value, no_map).
 ** exception error: bad map: no_map
      in function  is_map_key/2
         called as is_map_key(value,no_map)
@@ -3715,15 +3797,18 @@ killed.
 For example:
 
 ```erlang
-exit(P2Pid, kill),
+1> P2Pid = spawn(fun() -> receive after infinity -> ok end end).
+2> exit(P2Pid, kill).
+true
 % P2 might not be killed
-is_process_alive(P2Pid),
+3> is_process_alive(P2Pid).
+false
 % P2 is not alive (the call above always return false)
 ```
 
 See the documentation about [signals](`e:system:ref_man_processes.md#signals`)
-and [erlang:exit/2](`exit/2`) for more information about signals and exit
-signals.
+and [erlang:exit_signal/2](`exit_signal/2`) for more information about signals and
+exit signals.
 """.
 -doc #{ category => processes }.
 -spec is_process_alive(Pid) -> boolean() when
@@ -4112,8 +4197,8 @@ identifier.
 ## Examples
 
 ```erlang
-> list_to_pid("<0.4.1>").
-<0.4.1>
+1> list_to_pid("<0.1.0>").
+<0.1.0>
 ```
 """.
 -doc #{ category => terms }.
@@ -4136,8 +4221,8 @@ identifier.
 ## Examples
 
 ```erlang
-> list_to_port("#Port<0.4>").
-#Port<0.4>
+1> list_to_port("#Port<0.0>").
+#Port<0.0>
 ```
 
 """.
@@ -4161,8 +4246,8 @@ Failure: `badarg` if `String` contains a bad representation of a reference.
 ## Examples
 
 ```erlang
-> list_to_ref("#Ref<0.4192537678.4073193475.71181>").
-#Ref<0.4192537678.4073193475.71181>
+1> list_to_ref("#Ref<0.0.0.0>").
+#Ref<0.0.0.0>
 ```
 """.
 -doc(#{since => <<"OTP 20.0">>}).
@@ -4962,8 +5047,8 @@ Returns a string corresponding to the text representation of `Pid`.
 ## Examples
 
 ```erlang
-> erlang:pid_to_list(self()).
-"<0.85.0>"
+1> erlang:pid_to_list(<0.1.0>).
+"<0.1.0>"
 ```
 """.
 -doc #{ category => terms }.
@@ -4975,6 +5060,13 @@ pid_to_list(_Pid) ->
 -doc """
 Returns a string corresponding to the text representation of the port identifier
 `Port`.
+
+## Examples
+
+```erlang
+1> erlang:port_to_list(#Port<0.0>).
+"#Port<0.0>"
+```
 """.
 -doc #{ category => terms }.
 -spec port_to_list(Port) -> string() when
@@ -5618,10 +5710,15 @@ items in the process dictionary.
 For example:
 
 ```erlang
-> X = put(name, walrus), Y = put(name, carpenter),
-Z = get(name),
-{X, Y, Z}.
-{undefined,walrus,carpenter}
+1> X = put(name, walrus).
+undefined
+2> Y = put(name, carpenter).
+walrus
+3> Z = get(name).
+carpenter
+4> erase(name).
+5> get(name).
+undefined
 ```
 
 > #### Note {: .info }
@@ -5759,6 +5856,13 @@ Returns a string corresponding to the text representation of `Ref`.
 >
 > This BIF is intended for debugging and is not to be used in application
 > programs.
+
+## Examples
+
+```erlang
+1> ref_to_list(#Ref<0.0.0.0>).
+"#Ref<0.0.0.0>"
+```
 """.
 -doc #{ category => terms }.
 -spec ref_to_list(Ref) -> string() when
@@ -5778,7 +5882,8 @@ a pid or port identifies as an argument.
 For example:
 
 ```erlang
-> register(db, Pid).
+1> Pid = spawn(fun() -> receive after infinity -> ok end end).
+2> register(db, Pid).
 true
 ```
 
@@ -6172,7 +6277,10 @@ in the suspended state if it is not already in that state. A suspended process
 is not scheduled for execution until the process has been resumed. If the
 suspended process currently is waiting in a `receive ... after` expression, the
 timer for the timeout will, as of OTP 28.0, also be suspended until the process
-is resumed.
+is resumed. BIF timers (see [`erlang:send_after/3`](`send_after/3`) and
+[`erlang:start_timer/3`](`start_timer/3`)) created using the PID of `Suspendee`
+will, as of OTP 29.0, also be suspended until the process is resumed. BIF timers
+created using a registered name are not affected.
 
 A process can be suspended by multiple processes and can be suspended multiple
 times by a single process. A suspended process does not leave the suspended
@@ -6359,10 +6467,10 @@ The second argument is a list of monitoring options to enable:
 For more detailed descriptions about the monitoring options, see
 `trace:system/3`.
 
-Unlink `trace:system/3`, the arguments to
-[`system_monitor/2`](`system_monitor/2`) specifies how all system monitoring
-should be set, not how it should be changed. This means only one process
-at a time (`MonitorPid`) can be the receiver of messages from system monitoring set
+Unlike `trace:system/3`, the arguments to
+[`system_monitor/2`](`system_monitor/2`) specify how all system monitoring
+should be set, not how it should be changed. This means only one process at a
+time (`MonitorPid`) can be the receiver of messages from system monitoring set
 with this function. Also, the way to clear a specific monitor option is to not
 include it in the list `Options`. All system monitoring will, however, be
 cleared if the process identified by `MonitorPid` terminates.
@@ -6483,8 +6591,8 @@ catch expression returns value `Any`.
 For example:
 
 ```erlang
-> catch throw({hello, there}).
-        {hello,there}
+1> catch throw({hello, there}).
+{hello,there}
 ```
 
 If evaluated within a `try`\-block of a
@@ -6494,15 +6602,16 @@ within the catch block.
 For example:
 
 ```erlang
-try
-    throw({my_exception, "Something happened"})
-catch
-    throw:{my_exception, Desc} ->
-        io:format(standard_error, "Error: ~s~n", [Desc])
-end
+1>  try
+        throw({my_exception, "Something happened"})
+    catch
+        throw:{my_exception, Desc} ->
+            io:format(standard_error, "Error: ~s~n", [Desc])
+    end.
+%% Output to standard error: Error: Something happened
 ```
 
-Failure: `nocatch` if not caught by an exception handler.
+If `throw/1` is not evaluated within a catch, a `nocatch` run-time error occurs.
 
 See the guide about [errors and error handling](`e:system:errors.md`) for
 additional information.
@@ -6748,7 +6857,7 @@ between the caller and the unlinkee has no effect on the caller in the future
 message queue of the caller before the [`unlink(Id)`](`unlink/1`) call
 completed. Also note that the `{'EXIT', Id, ExitReason}` message may be the
 result of the link, but may also be the result of the unlikee sending the caller
-an exit signal by calling the `exit/2` BIF. Therefore, it may or may not be
+an exit signal by calling the `exit_signal/2` BIF. Therefore, it may or may not be
 appropriate to clean up the message queue after a call to
 [`unlink(Id)`](`unlink/1`) as follows, when trapping exits:
 
@@ -7220,46 +7329,85 @@ false
 is_port(_Term) ->
     erlang:nif_error(undefined).
 
-%% Shadowed by erl_bif_types: erlang:is_record/2
+%% Shadowed by erl_bif_types: erlang:is_record/1
 -doc """
-Returns `true` if `Term` is a tuple and its first element is `RecordTag`;
-otherwise, returns `false`.
+Returns `true` if `Term` is a native record; otherwise, returns `false`.
 
-> #### Note {: .info }
->
-> Normally, the compiler treats calls to [`is_record/2`](`is_record/2`)
-> specially. It emits code to verify that `Term` is a tuple, its first
-> element is `RecordTag`, and its size is correct. However, if `RecordTag`
-> is not a literal atom, the BIF [`is_record/2`](`is_record/2`) is called
-> instead and the size of the tuple is not verified.
+## Examples
 
-Allowed in guard tests, if `RecordTag` is a literal atom.
+```erlang
+1> NR = records:create(test, native, [], #{is_exported => true}).
+2> is_record(NR).
+true
+3> is_record(an_atom).
+false
+4> is_record({a,b,c}).
+false
+```
 """.
 -doc #{ category => terms }.
--spec is_record(Term, RecordTag) -> boolean() when
+-doc #{ since => ~"OTP 29.0" }.
+-spec is_record(Term) -> boolean() when
+      Term :: term().
+is_record(_Term) ->
+    erlang:nif_error(undefined).
+
+%% Shadowed by erl_bif_types: erlang:is_record/2
+-doc """
+Returns `true` if `Term` is either a tuple record or a native record named `Name`;
+otherwise, returns `false`.
+
+This is allowed in guard tests if `Name` is a literal atom.
+
+The compilation will fail with an error message if `Name` does not
+refer to either a record defined in the same module as the call to
+`is_record/2` or a native record imported into it.
+
+If `Name` is a variable and `Term` is a native record, this function
+returns `true` if `Name` refers to a native record named `Name` in any
+module; otherwise, it returns `false`.
+
+If `Name` is a variable and `Term` is tuple, this function returns
+`true` if the first element of the tuple is `Name`; otherwise, it
+returns `false`.
+
+> #### Change {: .change }
+>
+> Before OTP 29, this function would only work for tuple records.
+
+""".
+-doc #{ category => terms }.
+-spec is_record(Term, Name) -> boolean() when
       Term :: term(),
-      RecordTag :: atom().
-is_record(_Term,_RecordTag) ->
+      Name :: atom().
+is_record(_Term,_Name) ->
     erlang:nif_error(undefined).
 
 %% Shadowed by erl_bif_types: erlang:is_record/3
 -doc """
-Returns `true` if `Term` is a tuple, its first element is `RecordTag`, and its
-size is `Size`; otherwise, returns `false`.
+Returns `true` either if `Term` is a native record defined in module `Module`
+with name `Name`, or if `Term` is a tuple, its first element is `Name`, and its
+size is `Arity`; otherwise, returns `false`.
 
-Allowed in guard tests if `RecordTag` is a literal atom and `Size` is a literal
-integer.
+This is allowed in guard tests if either `Module` and `Name` are literal atoms, or
+`Name` is a literal atom and `Size` is a literal integer.
 
 > #### Note {: .info }
 >
-> This BIF is documented for completeness. Usually
-> [`is_record/2`](`is_record/2`) is to be used.
+> This BIF only checks if `Term` is a native record created from the given
+> module. It does not check whether `Term` is still defined in the given
+> module, nor whether it is exported.
+
+> #### Change {: .change }
+>
+> Before Erlang/OTP 29, this function only worked for tuple records.
+
 """.
 -doc #{ category => terms }.
--spec is_record(Term, RecordTag, Size) -> boolean() when
-      Term :: term(),
-      RecordTag :: atom(),
-      Size :: non_neg_integer().
+-spec is_record(Term :: dynamic(), Module :: module(),
+                Name :: atom()) -> boolean();
+               (Term :: dynamic(), Name :: atom(),
+                Arity :: non_neg_integer()) -> boolean().
 is_record(_Term,_RecordTag,_Size) ->
     erlang:nif_error(undefined).
 
@@ -7300,6 +7448,32 @@ false
       Term :: term().
 is_tuple(_Term) ->
     erlang:nif_error(undefined).
+
+%% Shadowed by erl_bif_types: erlang:is_integer/3
+-doc """
+Returns `true` if `Term`, `LB`, and `UB` all evaluate to integers, and `Term`
+is between `LB` and `UB` inclusive; otherwise, returns `false`.
+
+## Examples
+
+```erlang
+1> is_integer(15, 0, 1024).
+true
+2> is_integer(-1, 0, 1).
+false
+```
+
+Failure: `badarg` if `LB` or `UB` does not evaluate to an integer.
+""".
+-doc(#{since => ~"OTP 29.0"}).
+-doc #{ category => terms }.
+-spec is_integer(Term, LB, UB) -> boolean() when
+      Term :: integer(),
+      LB :: integer(),
+      UB :: integer().
+is_integer(_Term, _LB, _UB) ->
+    erlang:nif_error(undefined).
+
 
 -doc """
 Loads `Module` described by the object code contained within `Binary`.
@@ -7896,7 +8070,7 @@ of the flag.
   receives an exit signal other than `normal` and the exit signal is propagated to
   its linked processes. Application processes are normally not to trap exits.
   
-  See also `exit/2`.
+  See also `exit_signal/2`.
   
 - ```erlang
   process_flag(error_handler, module())
@@ -8765,7 +8939,7 @@ The possible flags are:
                    port => 221631,
                    sleep => 5150294100},
      id => 1,
-     type => scheduler}|...]
+     type => scheduler}, ...]
   ```
 
   The time unit is the same as returned by `os:perf_counter/0`. So, to convert it
@@ -10392,9 +10566,9 @@ of `Args`.
 For example:
 
 ```erlang
-> apply(lists, reverse, [[a, b, c]]).
+1> apply(lists, reverse, [[a, b, c]]).
 [c,b,a]
-> apply(erlang, atom_to_list, ['Erlang']).
+2> apply(erlang, atom_to_list, ['Erlang']).
 "Erlang"
 ```
 
@@ -10456,11 +10630,9 @@ the new process, atomically. Otherwise works like `spawn/3`.
 """.
 -doc #{ category => processes }.
 -spec spawn_link(Fun) -> pid() when
-      Fun :: function().
-spawn_link(F) when erlang:is_function(F) ->
+      Fun :: fun(() -> term()).
+spawn_link(F) when erlang:is_function(F, 0) ->
     erlang:spawn_link(erlang, apply, [F, []]);
-spawn_link({M,F}=MF) when erlang:is_atom(M), erlang:is_atom(F) ->
-    erlang:spawn_link(erlang, apply, [MF, []]);
 spawn_link(F) ->
     badarg_with_info([F]).
 
@@ -10474,13 +10646,11 @@ process. Otherwise works like `spawn/3`.
 -doc #{ category => processes }.
 -spec spawn_link(Node, Fun) -> pid() when
       Node :: node(),
-      Fun :: function().
+      Fun :: fun(() -> term()).
 spawn_link(N, F) when N =:= erlang:node() ->
     spawn_link(F);
-spawn_link(N, F) when erlang:is_function(F) ->
+spawn_link(N, F) when erlang:is_function(F, 0) ->
     spawn_link(N, erlang, apply, [F, []]);
-spawn_link(N, {M,F}=MF) when erlang:is_atom(M), erlang:is_atom(F) ->
-    spawn_link(N, erlang, apply, [MF, []]);
 spawn_link(N, F) ->
     badarg_with_info([N, F]).
 
@@ -12666,13 +12836,13 @@ descriptions of the `==` operator and how terms are ordered.
 ## Examples
 
 ```erlang
-> min(1, 2).
+1> min(1, 2).
 1
-> min(1.0, 1).
+2> min(1.0, 1).
 1.0
-> min(1, 1.0).
+3> min(1, 1.0).
 1
-> min("abc", "b").
+4> min("abc", "b").
 "abc"
 ```
 """.

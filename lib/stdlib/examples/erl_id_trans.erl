@@ -381,9 +381,9 @@ gexpr({call,Anno,{atom,Aa,F},As0}) ->
     end;
 % Guard bif's can be remote, but only in the module erlang...
 gexpr({call,Anno,{remote,Aa,{atom,Ab,erlang},{atom,Ac,F}},As0}) ->
-    case erl_internal:guard_bif(F, length(As0)) or
-	 erl_internal:arith_op(F, length(As0)) or
-	 erl_internal:comp_op(F, length(As0)) or
+    case erl_internal:guard_bif(F, length(As0)) orelse
+	 erl_internal:arith_op(F, length(As0)) orelse
+	 erl_internal:comp_op(F, length(As0)) orelse
 	 erl_internal:bool_op(F, length(As0)) of
 	true -> As1 = gexpr_list(As0),
 		{call,Anno,{remote,Aa,{atom,Ab,erlang},{atom,Ac,F}},As1}
@@ -392,7 +392,7 @@ gexpr({bin,Anno,Fs}) ->
     Fs2 = pattern_grp(Fs),
     {bin,Anno,Fs2};
 gexpr({op,Anno,Op,A0}) ->
-    case erl_internal:arith_op(Op, 1) or
+    case erl_internal:arith_op(Op, 1) orelse
 	 erl_internal:bool_op(Op, 1) of
 	true -> A1 = gexpr(A0),
 		{op,Anno,Op,A1}
@@ -403,8 +403,8 @@ gexpr({op,Anno,Op,L0,R0}) when Op =:= 'andalso'; Op =:= 'orelse' ->
     R1 = gexpr(R0),			%They see the same variables
     {op,Anno,Op,L1,R1};
 gexpr({op,Anno,Op,L0,R0}) ->
-    case erl_internal:arith_op(Op, 2) or
-	  erl_internal:bool_op(Op, 2) or
+    case erl_internal:arith_op(Op, 2) orelse
+	  erl_internal:bool_op(Op, 2) orelse
 	  erl_internal:comp_op(Op, 2) of
 	true ->
 	    L1 = gexpr(L0),
@@ -453,7 +453,7 @@ expr({cons,Anno,H0,T0}) ->
     {cons,Anno,H1,T1};
 expr({lc,Anno,E0,Qs0}) ->
     Qs1 = comprehension_quals(Qs0),
-    E1 = expr(E0),
+    E1 = expr_or_exprs(E0),
     {lc,Anno,E1,Qs1};
 expr({bc,Anno,E0,Qs0}) ->
     Qs1 = comprehension_quals(Qs0),
@@ -461,7 +461,7 @@ expr({bc,Anno,E0,Qs0}) ->
     {bc,Anno,E1,Qs1};
 expr({mc,Anno,E0,Qs0}) ->
     Qs1 = comprehension_quals(Qs0),
-    E1 = expr(E0),
+    E1 = expr_or_exprs(E0),
     {mc,Anno,E1,Qs1};
 expr({tuple,Anno,Es0}) ->
     Es1 = expr_list(Es0),
@@ -588,6 +588,14 @@ expr_list([E0|Es]) ->
     E1 = expr(E0),
     [E1|expr_list(Es)];
 expr_list([]) -> [].
+
+%% -type expr_or_exprs(Expression) -> Expression.
+%% -type expr_or_exprs([Expression]) -> [Expression].
+%%  Comprehensions can have a single or multiple emitting expressions
+expr_or_exprs(Es) when is_list(Es) ->
+    expr_list(Es);
+expr_or_exprs(E) ->
+    expr(E).
 
 %% -type record_inits([RecordInit]) -> [RecordInit].
 %%  N.B. Field names are full expressions here but only atoms are allowed

@@ -127,7 +127,7 @@ ERL_COMPILE_FLAGS += \
 	-I ../../../libraries/et/include \
 	-I $(ERL_TOP)/lib \
 	-pa $(ERL_TOP)/lib/wx/ebin \
-	-Werror
+	-Werror +nowarn_deprecated_catch
 
 # ----------------------------------------------------
 # Targets
@@ -168,3 +168,8 @@ release_spec: opt
 release_docs_spec:
 	$(INSTALL_DIR) "$(RELSYSDIR)/doc/examples"
 	$(INSTALL_DATA) $(EXAMPLE_FILES) "$(RELSYSDIR)/doc/examples"
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2004-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -406,7 +406,27 @@ shell_attribute_test(Config) ->
          {putline, "rl()."},
          {expect, "\\Q-record(hej,{a = \"\", b = 0 :: integer()}).\\E"},
          {putline, "#hej{a = \"hej\", b=1}."},
-         {expect, "\\Q#hej{a = \"hej\", b=1}\\E"}
+         {expect, "\\Q#hej{a = \"hej\", b=1}\\E"},
+         {putline, "-record #native{i = 42, j}."},
+         {expect, "ok"},
+         {putline, "rl()."},
+         {expect, "\\Q-record #native{i = 42, j}.\\E"},
+         {putline, ~S"#native{}."},
+         {expect, ~S"\Q* 1:1: field j is not initialized in native record native\E"},
+         {putline, ~S"Rec = #native{j=99}."},
+         {expect, ~S"\Q#shell_default:native{i = 42,j = 99}\E"},
+         {putline, ~S"#native{i=42, j=99} = Rec."},
+         {expect, ~S"\Q#shell_default:native{i = 42,j = 99}\E"},
+         {putline, ~S"Rec#native.i."},
+         {expect, ~S"\Q42\E"},
+         {putline, ~S"Rec#_.i."},
+         {expect, ~S"\Q42\E"},
+         {putline, ~S"Rec#native{j=100}."},
+         {expect, ~S"\Q#shell_default:native{i = 42,j = 100}\E"},
+         {putline, ~S"Rec#_{j=100}."},
+         {expect, ~S"\Q#shell_default:native{i = 42,j = 100}\E"},
+         {putline, ~S"#native{z=99}."},
+         {expect, ~S"\Q* 1:9: field z undefined in record native\E"}
         ],[],"", ["-kernel","shell_history","enabled",
         "-kernel","shell_history_path","\"" ++ Path ++ "\"",
         "-kernel","shell_history_drop","[\"init:stop().\"]"]),
@@ -3159,7 +3179,7 @@ otp_14296(Config) when is_list(Config) ->
             F = fun() -> a end,
             LocalFun = term_to_string(F),
             S = LocalFun ++ ".",
-            "1:2: syntax error before: Fun" = comm_err(S)
+            "1:5: syntax error before: '<'" = comm_err(S)
     end(),
 
     fun() ->
@@ -3194,13 +3214,13 @@ otp_14296(Config) when is_list(Config) ->
     fun() ->
             UnknownPort = "#Port<100000.0>",
             S = UnknownPort ++ ".",
-            "1:2: syntax error before: Port" = comm_err(S)
+            "1:6: syntax error before: '<'" = comm_err(S)
     end(),
 
     fun() ->
             UnknownRef = "#Ref<100000.0.0.0>",
             S = UnknownRef ++ ".",
-            "1:2: syntax error before: Ref" = comm_err(S)
+            "1:5: syntax error before: '<'" = comm_err(S)
     end(),
 
     fun() ->

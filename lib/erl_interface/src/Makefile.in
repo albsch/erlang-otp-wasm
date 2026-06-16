@@ -44,14 +44,6 @@ include $(TARGET)/eidefs.mk
 
 include $(ERL_TOP)/make/output.mk
 
-ERTS_USE_BUILTIN_OPENSSL=@ERTS_USE_BUILTIN_OPENSSL@
-
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-include openssl/openssl.mk
-else
-ERTS_DIR=erts
-endif
-
 EBINDIR=../ebin
 
 APP_FILE= erl_interface.app
@@ -106,13 +98,7 @@ AR_FLAGS=rcv
 endif
 
 INCFLAGS = -I. -I../include -Iconnect -Iencode -Idecode -Imisc -Iepmd \
-	-I$(TARGET)
-
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-INCFLAGS += -Iopenssl/include
-else
-INCFLAGS += -Ierts
-endif
+	-Ierts -I$(TARGET) 
 
 ifeq ($(USING_VC),yes)
 WARNFLAGS = -Wall
@@ -124,9 +110,6 @@ WARNFLAGS += -DEI_NO_DEPR_WARN
 
 CFLAGS = @LIB_CFLAGS@ @DEFS@ $(WARNFLAGS) $(INCFLAGS) $(TYPE_FLAGS) \
 	-DERL_INTERFACE
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-CFLAGS += -DERLANG_OPENSSL_INTEGRATION
-endif
 LIB_LD = @LIB_LD@
 LIB_LDFLAGS = @LIB_LDFLAGS@
 LIB_LD_FLAG_RUNTIME_LIBRARY_PATH = @LIB_LD_FLAG_RUNTIME_LIBRARY_PATH@
@@ -157,12 +140,7 @@ BINDIR     = $(ERL_TOP)/lib/erl_interface/bin/$(TARGET)
 # -Wno-char-subscripts
 # -Wshadow
 
-vpath %.c connect:encode:decode:misc:epmd:global
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-vpath %.c $(OPENSSL_VPATH)
-else
-vpath %.c erts
-endif
+vpath %.c connect:encode:decode:misc:epmd:global:erts
 
 ###########################################################################
 #  List targets
@@ -311,13 +289,8 @@ EISOURCES = \
 	$(ENCODESRC) \
 	$(EPMDSRC) \
 	$(MISCSRC) \
-	$(GLOBALSOURCES)
-
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-EISOURCES += $(OPENSSL_SOURCES)
-else
-EISOURCES += erts/erl_md5.c
-endif
+	$(GLOBALSOURCES) \
+	$(ERTS_SOURCES)
 
 CONNECTSRC = \
 	connect/ei_connect.c \
@@ -407,6 +380,9 @@ GLOBALSOURCES = \
 	global/global_register.c \
 	global/global_unregister.c \
 	global/global_whereis.c
+
+ERTS_SOURCES = \
+	erts/erl_md5.c
 
 SOURCES = $(EISOURCES)
 
@@ -676,19 +652,15 @@ $(MDD_OBJDIR)/ei_fake_prog_mdd_cxx$(EXE): prog/ei_fake_prog.c $(MDD_EILIB)
 	$(V_CC) -MDD $(PROG_CFLAGS) $(THR_DEFS) -o $@ -xc++ $< \
 		-L$(OBJDIR) -lei_r $(THR_LIBS) $(LIBS)
 
-ifeq ($(ERTS_USE_BUILTIN_OPENSSL),yes)
-erts:
-	$(V_colon)echo "No erts files needed."
-else
 ###########################################################################
 #  Steal some files from ERTS
 ###########################################################################
+
 erts:
 	$(V_colon)echo "Copy files from erts..."
 	mkdir -p erts
 	cp $(ERL_TOP)/erts/emulator/beam/erl_md5.c erts/
 	cp $(ERL_TOP)/erts/emulator/beam/erl_md5.h erts/
-endif
 
 ###########################################################################
 #  Create dependency file using gcc -MM
@@ -697,7 +669,7 @@ endif
 ifneq ($(ERTS_SKIP_DEPEND),true)
 depend: $(TARGET)/depend.mk
 
-$(TARGET)/depend.mk: $(TARGET)/config.h $(ERTS_DIR)
+$(TARGET)/depend.mk: $(TARGET)/config.h erts
 	$(gen_verbose)
 	$(V_colon)echo "Generating dependency file depend.mk..."
 	@echo "# Generated dependency rules" > $@
@@ -716,7 +688,7 @@ $(TARGET)/depend.mk: $(TARGET)/config.h $(ERTS_DIR)
 # For some reason this has to be after 'opt' target
 -include $(TARGET)/depend.mk
 else
-depend: $(ERTS_DIR)
+depend: erts
 endif
 # ----------------------------------------------------
 # Release Target

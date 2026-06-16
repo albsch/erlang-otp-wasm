@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -174,6 +174,8 @@ erts_prepare_loading(Binary* magic, Process *c_p, Eterm group_leader,
         BeamLoadError0(stp, "corrupt type table");
     case BEAMFILE_READ_CORRUPT_DEBUG_TABLE:
         BeamLoadError0(stp, "corrupt BEAM debug information table");
+    case BEAMFILE_READ_CORRUPT_RECORD_TABLE:
+        BeamLoadError0(stp, "corrupt record table");
     case BEAMFILE_READ_SUCCESS:
         break;
     }
@@ -205,6 +207,9 @@ erts_prepare_loading(Binary* magic, Process *c_p, Eterm group_leader,
          *
          * OTP 28 artificially sets the highest op code to `bs_create_bin`
          * introduced in OTP 25.
+         *
+         * OTP 29 artificially sets the highest op code to `update_record`
+         * introduced in OTP 26.
          *
          * Old BEAM files produced by OTP R12 and earlier may be
          * incompatible with the current runtime system. We used to
@@ -593,6 +598,9 @@ static int load_code(LoaderState* stp)
                  * the instruction is obsolete.
                  */
                 if (num_specific == 0 && gen_opc[tmp_op->op].transform == 0) {
+                    beamopallocator_free_op(&stp->op_allocator,
+                                            stp->genop);
+                    stp->genop = NULL;
                     BeamLoadError0(stp, PLEASE_RECOMPILE);
                 }
 
@@ -629,6 +637,9 @@ static int load_code(LoaderState* stp)
                         }
                     }
                 default:
+                    beamopallocator_free_op(&stp->op_allocator,
+                                            stp->genop);
+                    stp->genop = NULL;
                     BeamLoadError0(stp, "no specific operation found");
                 }
             }

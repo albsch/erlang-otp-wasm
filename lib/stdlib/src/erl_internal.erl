@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1998-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -86,6 +86,7 @@ guard_bif(element, 2) -> true;
 guard_bif(float, 1) -> true;
 guard_bif(floor, 1) -> true;
 guard_bif(hd, 1) -> true;
+guard_bif(is_integer, 3) -> true;
 guard_bif(is_map_key, 2) -> true;
 guard_bif(length, 1) -> true;
 guard_bif(map_size, 1) -> true;
@@ -132,6 +133,7 @@ new_type_test(is_port, 1) -> true;
 new_type_test(is_record, 2) -> true;
 new_type_test(is_record, 3) -> true;
 new_type_test(is_reference, 1) -> true;
+new_type_test(is_record, 1) -> true;
 new_type_test(is_tuple, 1) -> true;
 new_type_test(Name, A) when is_atom(Name), is_integer(A) -> false.
 
@@ -316,6 +318,8 @@ bif(error, 3) -> true;
 bif(exit, 1) -> true;
 bif(exit, 2) -> true;
 bif(exit, 3) -> true;
+bif(exit_signal, 2) -> true;
+bif(exit_signal, 3) -> true;
 bif(float, 1) -> true;
 bif(float_to_list, 1) -> true;
 bif(float_to_list, 2) -> true;
@@ -351,6 +355,7 @@ bif(is_float, 1) -> true;
 bif(is_function, 1) -> true;
 bif(is_function, 2) -> true;
 bif(is_integer, 1) -> true;
+bif(is_integer, 3) -> true;
 bif(is_list, 1) -> true;
 bif(is_map, 1) -> true;
 bif(is_map_key, 2) -> true;
@@ -361,6 +366,7 @@ bif(is_reference, 1) -> true;
 bif(is_tuple, 1) -> true;
 bif(is_record, 2) -> true;
 bif(is_record, 3) -> true;
+bif(is_record, 1) -> true;
 bif(length, 1) -> true;
 bif(link, 1) -> true;
 bif(link, 2) -> true;
@@ -501,6 +507,7 @@ is_type(number, 0) -> true;
 is_type(pid, 0) -> true;
 is_type(port, 0) -> true;
 is_type(pos_integer, 0) -> true;
+is_type(record, 0) -> true;
 is_type(reference, 0) -> true;
 is_type(string, 0) -> true;
 is_type(term, 0) -> true;

@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"2.7.1",
+{"2.8",
  [{<<".*">>,[{restart_application, parsetools}]}],
  [{<<".*">>,[{restart_application, parsetools}]}]
 }.

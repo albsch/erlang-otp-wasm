@@ -2,7 +2,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %%
-%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -43,7 +43,8 @@
          t_abstract_type/1,t_erl_parse_type/1,t_type/1,
          t_epp_dodger/1,t_epp_dodger_clever/1,
          t_comment_scan/1,t_prettypr/1,test_named_fun_bind_ann/1,
-         test_maybe_expr_ann/1,test_mc_ann/1,test_zip_ann/1]).
+         test_maybe_expr_ann/1,test_mc_ann/1,test_zip_ann/1,
+         is_literal/1]).
 
 suite() -> [{ct_hooks,[ts_install_cth]}].
 
@@ -54,7 +55,8 @@ all() ->
      t_abstract_type,t_erl_parse_type,t_type,
      t_epp_dodger,t_epp_dodger_clever,
      t_comment_scan,t_prettypr,test_named_fun_bind_ann,
-     test_maybe_expr_ann,test_mc_ann,test_zip_ann].
+     test_maybe_expr_ann,test_mc_ann,test_zip_ann,
+     is_literal].
 
 groups() ->
     [].
@@ -258,7 +260,9 @@ t_type(Config) when is_list(Config) ->
                     ,{"#{atom() => integer()}", map_type, false}
                     ,{"#{atom() := integer()}", map_type, false}
                     ,{"#r{}", record_type, false}
+                    ,{"#ext:r{}", record_type, false}
                     ,{"#r{a :: integer()}", record_type, false}
+                    ,{"#ext:r{a :: integer()}", record_type, false}
                     ,{"[]", type_application, false}
                     ,{"nil()", type_application, false}
                     ,{"[atom()]", type_application, false}
@@ -348,12 +352,14 @@ t_erl_parse_type(Config) when is_list(Config) ->
 		     {"#{ a:=1, b:=2 }", map_expr,false},
 		     {"M#{ a=>1, b=>2 }", map_expr,false},
 		     {"[V||V <- Vs]", list_comp,false},
+		     {"[V,V||V <- Vs]", list_comp,false},
 		     {"[V||V <:- Vs]", list_comp,false},
 		     {"[catch V||V <- Vs]", list_comp,false},
 		     {"<< <<B>> || <<B>> <= Bs>>", binary_comp,false},
 		     {"<< <<B>> || <<B>> <:= Bs>>", binary_comp,false},
 		     {"<< (catch <<B>>) || <<B>> <= Bs>>", binary_comp,false},
 		     {"#{K => V || {K,V} <- KVs}", map_comp,false},
+		     {"#{K => V, K => V || {K,V} <- KVs}", map_comp,false},
 		     {"#{K => V || {K,V} <:- KVs}", map_comp,false},
 		     {"#{K => (catch V) || {K,V} <- KVs}", map_comp,false},
                      {"[V+W||V <- Vs && W <- Ws]", list_comp,false},
@@ -363,10 +369,15 @@ t_erl_parse_type(Config) when is_list(Config) ->
                      {"<< <<B:8,C:8>> || <<B>> <= Bs && <<C>> <= Cs>>", binary_comp,false},
 		     {"<< (catch <<B:8,C:8>>) || <<B>> <= Bs && <<C>> <= Cs>>", binary_comp,false},
 		     {"#state{ a = A, b = B}", record_expr,false},
+		     {"#ext:state{ a = A, b = B}", record_expr,false},
 		     {"#state{}", record_expr,false},
+		     {"#ext:state{}", record_expr,false},
 		     {"#s{ a = #def{ a=A }, b = B}", record_expr,false},
+		     {"#ext:s{ a = #ext:def{ a=A }, b = B}", record_expr,false},
 		     {"State#state{ a = A, b = B}", record_expr,false},
+		     {"State#ext:state{ a = A, b = B}", record_expr,false},
 		     {"State#state.a", record_access,false},
+		     {"State#ext:state.a", record_access,false},
 		     {"#state.a", record_index_expr,false},
 		     {"-X", prefix_expr,false},
 		     {"X1 + X2", infix_expr,false},
@@ -747,6 +758,16 @@ validate_special_type(list,Node) ->
 validate_special_type(_,_) ->
     ok.
 
+is_literal(_Config) ->
+    true = erl_syntax:is_literal(string_to_expr(~s'<<"abc">>')),
+    true = erl_syntax:is_literal(string_to_expr(~s'<<"abc"/utf8>>')),
+    true = erl_syntax:is_literal(string_to_expr(~s'~"abc"')),
+    true = erl_syntax:is_literal(string_to_expr(
+                                   ~s'~"""
+                                      abc
+                                      """')),
+    ok.
+
 %%% scan_and_parse
 
 string_to_expr(String) ->
@@ -786,5 +807,5 @@ p_run_loop(Test, List, N, Refs0, Errors0) ->
 res_word_option() ->
     Options = [{feature, maybe_expr, enable}],
     {ok, {_Ftrs, ResWordFun}} =
-        erl_features:keyword_fun(Options, fun erl_scan:f_reserved_word/1),
+        erl_features:init_parse_state(Options, fun erl_scan:f_reserved_word/1),
     {reserved_word_fun, ResWordFun}.

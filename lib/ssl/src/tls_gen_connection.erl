@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2020-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -891,27 +891,27 @@ handle_unnegotiated_version(undefined, #{versions := [Version|_]} = Options, Dat
 handle_unnegotiated_version(Version, Options, Data, Buff, _, _) ->
     tls_handshake:get_tls_handshakes(Version, Data, Buff, Options).
 
-assert_buffer_sanity(<<?BYTE(_Type), ?UINT24(Length), Rest/binary>>, 
+assert_buffer_sanity(<<?BYTE(_Type), ?UINT24(Length), Rest/binary>>,
                      #{max_handshake_size := Max}) when
-      Length =< Max ->  
+      Length =< Max ->
     case byte_size(Rest) of
         N when N < Length ->
             true;
-        N when N > Length ->       
-            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, 
+        N when N > Length ->
+            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE,
                              too_big_handshake_data));
         _ ->
-            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, 
-                             malformed_handshake_data))  
-    end;  
+            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE,
+                             malformed_handshake_data))
+    end;
 assert_buffer_sanity(Bin, _) ->
     case byte_size(Bin) of
-        N when N < 3 ->
+        N when N < 4 ->
             true;
-        _ ->       
-            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE, 
+        _ ->
+            throw(?ALERT_REC(?FATAL, ?HANDSHAKE_FAILURE,
                              malformed_handshake_data))
-    end.  
+    end.
 
 decode_alerts(Bin) ->
     ssl_alert:decode(Bin).

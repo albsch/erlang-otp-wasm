@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %% 
-%% Copyright Ericsson AB 2024-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2024-2026. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -61,6 +61,7 @@
 -include_lib("common_test/include/ct.hrl").
 -include_lib("common_test/include/ct_event.hrl").
 -include("socket_test_evaluator.hrl").
+-include("socket_test_lib.hrl").
 -include("kernel_test_lib.hrl").
 
 %% Suite exports
@@ -156,7 +157,6 @@
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
--define(SLIB,       socket_test_lib).
 -define(KLIB,       kernel_test_lib).
 -define(LOGGER,     socket_test_logger).
 
@@ -173,6 +173,9 @@
 -define(TPP_NUM(Config, Base), (Base) div lookup(kernel_factor, 1, Config)).
 
 
+-define(BENCH_SUITE, socket_traffic).
+
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 suite() ->
@@ -180,36 +183,8 @@ suite() ->
      {timetrap, {minutes,1}}].
 
 all() -> 
-    %% Groups = [
-    %%           {counters,  "ESOCK_TEST_TRAFFIC_COUNTERS",  include},
-    %%           {chunks,    "ESOCK_TEST_TRAFFIC_CHUNKS",    include},
-    %%           {ping_pong, "ESOCK_TEST_TRAFFIC_PING_PONG", include},
-    %%           {tbench,    "ESOCK_TEST_TRAFFIC_BENCH",     include}
-    %%          ],
-    %% [use_group(Group, Env, Default) || {Group, Env, Default} <- Groups].
     [{group, standard}].
 
-%% use_group(_Group, undefined, exclude) ->
-%%     [];
-%% use_group(Group, undefined, _Default) ->
-%%     [{group, Group}];
-%% use_group(Group, Env, Default) ->
-%% 	case os:getenv(Env) of
-%% 	    false when (Default =:= include) ->
-%% 		[{group, Group}];
-%% 	    false ->
-%% 		[];
-%% 	    Val ->
-%% 		case list_to_atom(string:to_lower(Val)) of
-%% 		    Use when (Use =:= include) orelse 
-%% 			     (Use =:= enable) orelse 
-%% 			     (Use =:= true) ->
-%% 			[{group, Group}];
-%% 		    _ ->
-%% 			[]
-%% 		end
-%% 	end.
-    
 
 groups() -> 
     [
@@ -234,12 +209,37 @@ groups() ->
     ].
 
 standard_cases() ->
-    [
-     {group, counters},
-     {group, chunks},
-     {group, ping_pong},
-     {group, tbench}
-    ].
+    GroupsEnv = [
+                 {counters,  "ESOCK_TEST_TRAFFIC_COUNTERS",  include},
+                 {chunks,    "ESOCK_TEST_TRAFFIC_CHUNKS",    include},
+                 {ping_pong, "ESOCK_TEST_TRAFFIC_PING_PONG", include},
+                 {tbench,    "ESOCK_TEST_TRAFFIC_BENCH",     include}
+                ],
+    Groups =
+        [use_group(Group, Env, Default) || {Group, Env, Default} <- GroupsEnv],
+    lists:flatten(Groups).
+
+use_group(_Group, undefined, exclude) ->
+    [];
+use_group(Group, undefined, _Default) ->
+    [{group, Group}];
+use_group(Group, Env, Default) ->
+	case os:getenv(Env) of
+	    false when (Default =:= include) ->
+		[{group, Group}];
+	    false ->
+		[];
+	    Val ->
+		case list_to_atom(string:to_lower(Val)) of
+		    Use when (Use =:= include) orelse 
+			     (Use =:= enable) orelse 
+			     (Use =:= true) ->
+			[{group, Group}];
+		    _ ->
+			[]
+		end
+	end.
+
 
 bench_cases() ->
     [
@@ -356,7 +356,8 @@ init_per_suite(Config0) ->
        "~n      Nodes:  ~p", [Config0, erlang:nodes()]),
     
     try socket:info() of
-        #{} ->
+        #{load_nif_result := ok} ->
+	    ?P("~s -> socket nif loaded", [?FUNCTION_NAME]),
             case ?KLIB:init_per_suite(Config0) of
                 {skip, _} = SKIP ->
                     SKIP;
@@ -394,11 +395,22 @@ init_per_suite(Config0) ->
                                     {skip, "Failed starting logger"}
                             end
                     end
-            end
+            end;
+
+	#{load_nif_result := LoadRes} ->
+	    ?P("~s -> 'socket' not supperted"
+	       "~n   (socket) nif load result: ~p", [?FUNCTION_NAME, LoadRes]),
+	    {skip, "esock not supported (nif not loaded)"};
+	_ ->
+            ?P("~s -> 'socket' not supperted", [?FUNCTION_NAME]),
+	    {skip, "esock not supported"}
+
     catch
         error : notsup ->
+            ?P("~s -> 'socket' not supperted (error:notsup)", [?FUNCTION_NAME]),
             {skip, "esock not supported"};
         error : undef ->
+            ?P("~s -> 'socket' not supperted (error:undef)", [?FUNCTION_NAME]),
             {skip, "esock not configured"}
     end.
 
@@ -411,7 +423,7 @@ end_per_suite(Config0) ->
     %% Stop the local monitor
     kernel_test_sys_monitor:stop(),
 
-    (catch ?LOGGER:stop()),
+    ?CATCH_AND_IGNORE( ?LOGGER:stop() ),
 
     Config1 = ?KLIB:end_per_suite(Config0),
 
@@ -1096,7 +1108,7 @@ traffic_send_and_recv_stream(InitState) ->
                    end},
          #{desc => "close connection socket (just in case)",
            cmd  => fun(#{csock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(csock, State)}
                    end},
          #{desc => "close listen socket",
@@ -1112,7 +1124,7 @@ traffic_send_and_recv_stream(InitState) ->
                                            fun() -> State end),
                            {ok, maps:remove(lsock, State1)};
                       (#{lsock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(lsock, State)}
                    end},
 
@@ -1746,12 +1758,12 @@ traffic_sar_counters_validation(Counters, ValidateCounters) ->
 traffic_sar_counters_validation2(Counters, []) ->
     %% ?SEV_IPRINT("traffic_sar_counters_validation2 -> Remaining Counters: "
     %%             "~n   ~p", [Counters]),
-    (catch lists:foreach(
-             fun({_Cnt, 0})   -> ok;
-                ({Cnt,  Val}) ->
-                     throw({error, {invalid_counter, Cnt, Val}})
-             end,
-             Counters));
+    ?CATCH_AND_RETURN( lists:foreach(
+			 fun({_Cnt, 0})   -> ok;
+			    ({Cnt,  Val}) ->
+				 throw({error, {invalid_counter, Cnt, Val}})
+			 end,
+			 Counters) );
 traffic_sar_counters_validation2(Counters, [{Cnt, Val}|ValidateCounters]) ->
     %% ?SEV_IPRINT("traffic_sar_counters_validation2 -> try validate ~w when"
     %%             "~n   Counters:         ~p"
@@ -2255,7 +2267,7 @@ traffic_send_and_recv_udp(InitState) ->
                                            fun() -> State end),
                            {ok, maps:remove(lsock, State1)};
                       (#{sock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(sock, State)}
                    end},
 
@@ -3166,7 +3178,7 @@ traffic_send_and_recv_chunks_stream(InitState) ->
                    end},
          #{desc => "close connection socket (just in case)",
            cmd  => fun(#{csock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(csock, State)}
                    end},
          #{desc => "close listen socket",
@@ -3182,7 +3194,7 @@ traffic_send_and_recv_chunks_stream(InitState) ->
                                            fun() -> State end),
                            {ok, maps:remove(lsock, State1)};
                       (#{lsock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(lsock, State)}
                    end},
 
@@ -5409,7 +5421,7 @@ traffic_ping_pong_send_and_receive_stream2(InitState) ->
            cmd  => fun(#{domain   := local,
                          lsock    := Sock,
                          local_sa := #{path := Path}} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            State1 =
                                unlink_path(Path,
                                            fun() -> 
@@ -5418,7 +5430,7 @@ traffic_ping_pong_send_and_receive_stream2(InitState) ->
                                            fun() -> State end),
                            {ok, maps:remove(lsock, State1)};
                       (#{lsock := Sock} = State) ->
-                           (catch socket:close(Sock)),
+                           ?CATCH_AND_IGNORE( socket:close(Sock) ),
                            {ok, maps:remove(lsock, State)}
                    end},
 
@@ -7273,11 +7285,6 @@ tb_await_completion(BName,
 tb_await_termination(BName, Server, Client) ->
     tb_await_termination(BName, Server, Client, undefined).
 
--define(BENCH_EVENT(__N__, __V__),
-        #event{name = (__N__),
-               data = [{suite, atom_to_list(?MODULE)},
-                       {value, (__V__)}]}).
-
 tb_await_termination(BName,
                      {ServerPid, ServerMRef} = Server,
                      {ClientPid, ClientMRef} = Client,
@@ -7302,10 +7309,6 @@ tb_await_termination(BName,
                         "~n   ~p", [ServerReason]),
             tb_await_termination(BName,
                                  undefined, Client, Comment)
-    %% after 1000 ->
-    %%         ?SEV_IPRINT("[ctrl] timeout waiting for client and/or server exit:"
-    %%                     "~n   MQueue: ~p", [?SLIB:pi(messages)]),
-    %%         tb_await_termination(BName, Server, Client, Comment)
     end;
 tb_await_termination(_BName,
                      {ServerPid, ServerMRef} = _Server,
@@ -7395,27 +7398,27 @@ tb_server_loop(#{listen := LS, accept := AS, send := Send} = State) ->
                         {error, SReason} ->
                             ?SEV_EPRINT("[server] unexpected send error:"
                                         "~n   ~p", [SReason]),
-                            (catch socket:close(LS)),
-                            (catch socket:close(AS)),
+                            ?CATCH_AND_IGNORE( socket:close(LS) ),
+                            ?CATCH_AND_IGNORE( socket:close(AS) ),
                             exit({tb_server_send, SReason})
                     end;
                 {error, R2Reason} ->
                     ?SEV_EPRINT("[server] unexpected read (data) error:"
                                 "~n   ~p", [R2Reason]),
-                    (catch socket:close(LS)),
-                    (catch socket:close(AS)),
+                    ?CATCH_AND_IGNORE( socket:close(LS) ),
+                    ?CATCH_AND_IGNORE( socket:close(AS) ),
                     exit({tb_server_recv2, R2Reason})
             end;
         {error, closed} ->
             ?SEV_IPRINT("[server] socket closed => terminate"),
-            (catch socket:close(LS)),
-            (catch socket:close(AS)),
+            ?CATCH_AND_IGNORE( socket:close(LS) ),
+            ?CATCH_AND_IGNORE( socket:close(AS) ),
             exit(normal);
         {error, R1Reason} ->
             ?SEV_EPRINT("[server] unexpected read (sz) error:"
                         "~n   ~p", [R1Reason]),
-            (catch socket:close(LS)),
-            (catch socket:close(AS)),
+            ?CATCH_AND_IGNORE( socket:close(LS) ),
+            ?CATCH_AND_IGNORE( socket:close(AS) ),
             exit({tb_server_recv1, R1Reason})
     end.                    
 
@@ -7491,7 +7494,7 @@ tb_client_loop(Pid, Sock, Send, Data0, TStart, ARcv0, N0) ->
                                                 [TDiff, ARcv,
                                                  Exchange, UnitStr,
                                                  N]),
-                                    (catch socket:close(Sock)),
+                                    ?CATCH_AND_IGNORE( socket:close(Sock) ),
                                     exit({done, Res});
                                 false ->
                                     IOV = [SzBin | IOV0],
@@ -7504,19 +7507,19 @@ tb_client_loop(Pid, Sock, Send, Data0, TStart, ARcv0, N0) ->
                         {error, R2Reason} ->
                             ?SEV_EPRINT("[client] unexpected read (data) error:"
                                         "~n   ~p", [R2Reason]),
-                            (catch socket:close(Sock)),
+                            ?CATCH_AND_IGNORE( socket:close(Sock) ),
                             exit({tb_client_recv2, R2Reason})
                     end;
                 {error, R1Reason} ->
                     ?SEV_EPRINT("[client] unexpected read (sz) error:"
                                 "~n   ~p", [R1Reason]),
-                    (catch socket:close(Sock)),
+                    ?CATCH_AND_IGNORE( socket:close(Sock) ),
                     exit({tb_client_recv1, R1Reason})
             end;
         {error, SReason} ->
             ?SEV_EPRINT("[client] unexpected send error:"
                         "~n   ~p", [SReason]),
-            (catch socket:close(Sock)),
+            ?CATCH_AND_IGNORE( socket:close(Sock) ),
             exit({tb_client_send, SReason})
     end.                    
 
@@ -7567,7 +7570,7 @@ local_host() ->
 %% don't clash.
 
 mk_unique_path() ->
-    ?SLIB:mk_unique_path().
+    ?MK_UNIQ_PATH().
 
 
 which_local_socket_addr(local = Domain) ->
@@ -7668,20 +7671,7 @@ has_support_unix_domain_socket() ->
     end.
 
 has_support_sctp() ->
-    case os:type() of
-        {win32, _} ->
-            skip("Not supported");
-        {unix, netbsd} ->
-            %% XYZ We will have to investigate this later...
-            skip("Not supported");
-        _ ->
-            case socket:is_supported(sctp) of
-                true ->
-                    ok;
-                false ->
-                    skip("Not supported")
-            end
-    end.
+    ?HAS_SUPPORT_SCTP().
 
 
 %% The idea is that this function shall test if the test host has 

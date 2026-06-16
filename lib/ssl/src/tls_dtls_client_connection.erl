@@ -31,6 +31,8 @@
 -module(tls_dtls_client_connection).
 -moduledoc false.
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_term, 2}}]).
+
 -include_lib("public_key/include/public_key.hrl").
 
 -include("ssl_connection.hrl").
@@ -624,9 +626,9 @@ calculate_secret(#server_dhe_psk_params{
 			    Connection, certify, certify);
 calculate_secret(#server_ecdhe_psk_params{
                     dh_params = #server_ecdh_params{curve = ECCurve}} = ServerKey,
-                 #state{ssl_options = #{user_lookup_fun := PSKLookup}} =
-		     #state{handshake_env = HsEnv,
-                            session = Session} = State, Connection) ->
+                 #state{handshake_env = HsEnv,
+                        ssl_options = #{user_lookup_fun := PSKLookup},
+                        session = Session} = State, Connection) ->
     ECDHKeys = public_key:generate_key(ECCurve),
 
     PremasterSecret = ssl_handshake:premaster_secret(ServerKey, ECDHKeys, PSKLookup),

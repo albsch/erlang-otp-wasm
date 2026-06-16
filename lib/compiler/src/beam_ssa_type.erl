@@ -1159,6 +1159,21 @@ simplify(#b_set{op={bif,element},args=[#b_literal{val=Index},Tuple]}=I0, Ts, Ds)
         _ ->
             eval_bif(I0, Ts, Ds)
     end;
+simplify(#b_set{op={bif,get_record_field},
+                args=[Term,#b_literal{val=Name},#b_literal{val=F}=F0],
+                anno=Anno}=I0, Ts, Ds) when is_atom(Name) ->
+    case {map_get(record_module, Anno), normalized_type(Term, Ts)} of
+        {Mod, #t_record{name={Mod,Name},type=Es}} ->
+            case Es of
+                #{F := {present,_Type}} ->
+                    I = I0#b_set{anno=Anno,op=get_record_element,args=[Term,F0]},
+                    simplify(I, Ts, Ds);
+                #{} ->
+                    I0
+            end;
+        _ ->
+            I0
+    end;
 simplify(#b_set{op={bif,hd},args=[List]}=I, Ts, Ds) ->
     case normalized_type(List, Ts) of
         #t_cons{} ->
@@ -2318,6 +2333,8 @@ type(put_list, [Head, Tail], _Anno, Ts, _Ds) ->
     HeadType = concrete_type(Head, Ts),
     TailType = concrete_type(Tail, Ts),
     beam_types:make_cons(HeadType, TailType);
+type(put_record, Args, Anno, Ts, _Ds) ->
+    put_record_type(Args, Anno, Ts);
 type(put_tuple, Args, _Anno, Ts, _Ds) ->
     {Es, _} = foldl(fun(Arg, {Es0, Index}) ->
                             Type = concrete_type(Arg, Ts),
@@ -2374,6 +2391,37 @@ join_tuple_elements(I, Tuple, Type0) ->
     Type1 = beam_types:make_type_from_value(element(I, Tuple)),
     Type = beam_types:join(Type0, Type1),
     join_tuple_elements(I - 1, Tuple, Type).
+
+put_record_type(Args, Anno, Ts) ->
+    [Src, Name | Fs0] = Args,
+
+    Defs = case Src of
+               #b_literal{val=empty} ->
+                   map_get(record_defaults, Anno);
+               #b_var{}=Var ->
+                   case Ts of
+                       #{Var := #t_record{type=Defs0}} -> Defs0;
+                       #{} -> #{}
+                   end
+           end,
+
+    Fs = record_field_types(Fs0, Ts, Defs),
+
+    case Name of
+        #b_literal{val={Mod,Tag}} when is_atom(Mod), is_atom(Tag) ->
+            #t_record{name={Mod,Tag}, type=Fs};
+        #b_literal{val='_'} ->
+            #t_record{name=nil, type=Fs};
+        #b_literal{val=Tag} when is_atom(Tag) ->
+            Mod = map_get(record_module, Anno),
+            #t_record{name={Mod,Tag}, type=Fs}
+    end.
+
+record_field_types([#b_literal{val=Key}, Value0 | Fs], Ts, Acc) ->
+    Value = concrete_type(Value0, Ts),
+    record_field_types(Fs, Ts, Acc#{Key => {present, Value}});
+record_field_types([], _Ts, Acc) ->
+    Acc.
 
 put_map_type(Map, Ss, Ts) ->
     pmt_1(Ss, Ts, concrete_type(Map, Ts)).
@@ -2725,6 +2773,15 @@ make_number({'-inf','+inf'}) ->
 make_number({_,_}=R) ->
     #t_number{elements=R}.
 
+make_integer({'-inf','+inf'}) ->
+    #t_integer{};
+make_integer({'-inf',_}=R) ->
+    #t_integer{elements=R};
+make_integer({Min,Max}=R) when is_integer(Min), Min =< Max ->
+    #t_integer{elements=R};
+make_integer(_) ->
+    #t_integer{}.
+
 inv_relop({bif,Op}) -> inv_relop_1(Op);
 inv_relop(_) -> none.
 
@@ -2739,6 +2796,14 @@ inv_relop_1(_) -> none.
 infer_get_range(#t_integer{elements=R}) -> R;
 infer_get_range(#t_number{elements=R}) -> R;
 infer_get_range(_) -> unknown.
+
+infer_integer_get_range(Arg, Ts) ->
+    case concrete_type(Arg, Ts) of
+        #t_integer{elements={_,_}=R} ->
+            R;
+        _ ->
+            {'-inf','+inf'}
+    end.
 
 infer_br_value(_V, _Bool, none) ->
     none;
@@ -2818,6 +2883,18 @@ infer_type({bif,is_function}, [#b_var{}=Arg, Arity], _Ts, _Ds) ->
 infer_type({bif,is_integer}, [#b_var{}=Arg], _Ts, _Ds) ->
     T = {Arg, #t_integer{}},
     {[T], [T]};
+infer_type({bif,is_integer}, [#b_var{}=Arg,
+                              #b_literal{val=Min},
+                              #b_literal{val=Max}], _Ts, _Ds) when Min =< Max ->
+    T = {Arg, beam_types:make_integer(Min, Max)},
+    {[T], [T]};
+infer_type({bif,is_integer}, [#b_var{}=Arg,Min0,Max0], Ts, _Ds) ->
+    {Min,_} = infer_integer_get_range(Min0, Ts),
+    {_,Max} = infer_integer_get_range(Max0, Ts),
+    T = {Arg, make_integer({Min,Max})},
+    %% Conservatively never attempt to subtract the type; subtraction
+    %% will most likely be incorrect or useless.
+    {[T], []};
 infer_type({bif,is_list}, [#b_var{}=Arg], _Ts, _Ds) ->
     T = {Arg, #t_list{}},
     {[T], [T]};
@@ -2838,6 +2915,15 @@ infer_type({bif,is_reference}, [#b_var{}=Arg], _Ts, _Ds) ->
     {[T], [T]};
 infer_type({bif,is_tuple}, [#b_var{}=Arg], _Ts, _Ds) ->
     T = {Arg, #t_tuple{}},
+    {[T], [T]};
+infer_type({bif,is_record}, [#b_var{}=Arg], _Ts, _Ds) ->
+    T = {Arg, #t_record{}},
+    {[T], [T]};
+infer_type({bif,is_record}, [#b_var{}=Arg,
+                             #b_literal{val=Mod},
+                             #b_literal{val=Name}],
+           _Ts, _Ds) ->
+    T = {Arg, #t_record{name={Mod,Name}}},
     {[T], [T]};
 infer_type({bif,'and'}, [#b_var{}=LHS,#b_var{}=RHS], Ts, Ds) ->
     %% When this BIF yields true, we know that both `LHS` and `RHS` are 'true'
@@ -2882,6 +2968,17 @@ infer_success_type(bs_match, [#b_literal{val=binary},
     %% position, so we know that Ctx has the same unit.
     T = {Ctx, #t_bs_context{tail_unit=OpUnit}},
     {[T], [T]};
+infer_success_type(get_record_element, [#b_var{}=Arg,
+                                        #b_literal{val=F}],
+                   Ts, _Ds) ->
+    case concrete_type(Arg, Ts) of
+        #t_record{type=#{F := {present,_}}} ->
+            {[], []};
+        _ ->
+            Es = #{F => {present,any}},
+            T = {Arg, #t_record{type=Es}},
+            {[T], []}
+    end;
 infer_success_type(_Op, _Args, _Ts, _Ds) ->
     {[], []}.
 
@@ -2936,17 +3033,18 @@ join_types(Ts, Ts) ->
 join_types(LHS, RHS) ->
     if
         map_size(LHS) < map_size(RHS) ->
-            join_types_1(maps:keys(LHS), RHS, LHS);
+            join_types_1(maps:next(maps:iterator(LHS)), RHS, LHS);
         true ->
-            join_types_1(maps:keys(RHS), LHS, RHS)
+            join_types_1(maps:next(maps:iterator(RHS)), LHS, RHS)
     end.
 
 %% Joins two type maps, keeping the variables that are common to both maps.
-join_types_1([V | Vs], Bigger, Smaller) ->
-    case {Bigger, Smaller} of
-        {#{ V := Same }, #{ V := Same }} ->
-            join_types_1(Vs, Bigger, Smaller);
-        {#{ V := LHS0 }, #{ V := RHS0 }} ->
+join_types_1({V, RHS0, Iter0}, Bigger, Smaller) ->
+    Iter = maps:next(Iter0),
+    case Bigger of
+        #{V := RHS0} ->
+            join_types_1(Iter, Bigger, Smaller);
+        #{V := LHS0} ->
             %% Inlined concrete_type/2 for performance.
             LHS = case is_function(LHS0) of
                       true -> LHS0(Bigger);
@@ -2957,11 +3055,11 @@ join_types_1([V | Vs], Bigger, Smaller) ->
                       false -> RHS0
                   end,
             T = beam_types:join(LHS, RHS),
-            join_types_1(Vs, Bigger, Smaller#{ V := T });
-        {#{}, #{ V := _ }} ->
-            join_types_1(Vs, Bigger, maps:remove(V, Smaller))
+            join_types_1(Iter, Bigger, Smaller#{V := T});
+        #{} ->
+            join_types_1(Iter, Bigger, maps:remove(V, Smaller))
     end;
-join_types_1([], _Bigger, Smaller) ->
+join_types_1(none, _Bigger, Smaller) ->
     Smaller.
 
 meet_types([{#b_literal{}=Lit, T0} | Vs], Ts) ->

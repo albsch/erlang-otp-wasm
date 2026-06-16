@@ -28,7 +28,7 @@
 %% either the Apache License or the LGPL.
 %%
 %% %CopyrightEnd%
-{"2.10.3",
+{"2.11",
  [{<<".*">>,[{restart_application, eunit}]}],
  [{<<".*">>,[{restart_application, eunit}]}]
 }.

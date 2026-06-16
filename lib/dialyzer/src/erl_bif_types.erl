@@ -5,7 +5,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 %%
 %% Copyright 2004-2010 held by the authors. All Rights Reserved.
-%% Copyright Ericsson AB 2020-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,12 +21,9 @@
 %%
 %% %CopyrightEnd%
 %%
-%% @doc Type information for Erlang Built-in functions (implemented in C)
-%% @copyright 2002 Richard Carlsson, 2006 Richard Carlsson, Tobias Lindahl
+%% Type information for Erlang Built-in functions (implemented in C)
+%% Authors: 2002 Richard Carlsson, 2006 Richard Carlsson, Tobias Lindahl
 %% and Kostis Sagonas
-%% @author Richard Carlsson <carlsson.richard@gmail.com>
-%% @author Tobias Lindahl <tobias.lindahl@gmail.com>
-%% @author Kostis Sagonas <kostis@it.uu.se>
 
 -module(erl_bif_types).
 -moduledoc false.
@@ -84,6 +81,9 @@
 		    t_is_pid/1,
 		    t_is_port/1,
 		    t_is_maybe_improper_list/1,
+		    t_is_record/1,
+		    t_is_record/2,
+		    t_is_record/3,
 		    t_is_reference/1,
 		    t_is_subtype/2,
 		    t_is_tuple/1,
@@ -102,6 +102,7 @@
 		    t_pid/0,
 		    t_port/0,
 		    t_maybe_improper_list/0,
+		    t_record/0,
 		    t_reference/0,
 		    t_string/0,
 		    t_subtract/2,
@@ -685,15 +686,20 @@ type(erlang, is_port, 1, Xs) ->
                         t_port())
         end,
   strict(erlang, is_port, 1, Xs, Fun);
+type(erlang, is_record, 1, Xs) ->
+  Fun = fun (X) ->
+	    check_guard(X, fun (Y) -> t_is_record(Y) end,
+			t_record())
+	end,
+  strict(erlang, is_record, 1, Xs, Fun);
 type(erlang, is_record, 2, Xs) ->
   Fun = fun ([X, Y]) ->
-	    case t_is_tuple(X) of
-	      false ->
-		case t_is_none(t_inf(t_tuple(), X)) of
-		  true -> t_atom('false');
-		  false -> t_boolean()
-		end;
-	      true ->
+	    case {t_is_tuple(X), t_is_record(X, Y)} of
+	      {false, true} ->
+		t_atom('true');
+	      {false, unknown} ->
+		t_boolean();
+	      {true, false} ->
 		case t_tuple_subtypes(X) of
 		  unknown -> t_boolean();
 		  [Tuple] ->
@@ -703,32 +709,39 @@ type(erlang, is_record, 2, Xs) ->
 		    end;
 		  List when length(List) >= 2 ->
 		    t_sup([type(erlang, is_record, 2, [T, Y]) || T <- List])
+		end;
+	      {false, false} ->
+		case t_is_none(t_inf(t_tuple(), X)) of
+		  true -> t_atom('false');
+		  false -> t_boolean()
 		end
 	    end
 	end,
   strict(erlang, is_record, 2, Xs, Fun);
 type(erlang, is_record, 3, Xs) ->
   Fun = fun ([X, Y, Z]) ->
-	    Arity = t_number_vals(Z),
-	    case t_is_tuple(X) of
-	      false when length(Arity) =:= 1 ->
+	    Arity = case is_integer(Z) of
+                      true -> t_number_vals(Z);
+                      false -> -1
+	            end,
+	    case {t_is_tuple(X), t_is_record(X, Y, Z)} of
+	      {false, false} when length(Arity) =:= 1 ->
 		[RealArity] = Arity,
 		case t_is_none(t_inf(t_tuple(RealArity), X)) of
 		  true -> t_atom('false');
 		  false -> t_boolean()
 		end;
-	      false ->
+	      {false, false} ->
 		case t_is_none(t_inf(t_tuple(), X)) of
 		  true -> t_atom('false');
 		  false -> t_boolean()
 		end;
-	      true when length(Arity) =:= 1 ->
+	      {true, false} when length(Arity) =:= 1 ->
 		[RealArity] = Arity,
 		case t_tuple_subtypes(X) of
 		  unknown -> t_boolean();
 		  [Tuple] ->
 		    case t_tuple_args(Tuple) of
-		      %% any -> t_boolean();
 		      Args when length(Args) =:= RealArity ->
                         check_record_tag(hd(Args), Y);
 		      Args when length(Args) =/= RealArity ->
@@ -737,7 +750,11 @@ type(erlang, is_record, 3, Xs) ->
 		  [_, _|_] ->
 		    t_boolean()
 		end;
-	      true ->
+	      {true, false} ->
+		t_boolean();
+	      {false, true} ->
+		t_atom('true');
+	      {false, unknown} ->
 		t_boolean()
 	    end
 	end,
@@ -2243,6 +2260,8 @@ arg_types(erlang, is_function, 2) ->
   [t_any(), t_arity()];
 arg_types(erlang, is_integer, 1) ->
   [t_any()];
+arg_types(erlang, is_integer, 3) ->
+  [t_any(),t_integer(), t_integer()];
 arg_types(erlang, is_list, 1) ->
   [t_any()];
 arg_types(erlang, is_map, 1) ->
@@ -2255,10 +2274,12 @@ arg_types(erlang, is_pid, 1) ->
   [t_any()];
 arg_types(erlang, is_port, 1) ->
   [t_any()];
+arg_types(erlang, is_record, 1) ->
+  [t_any()];
 arg_types(erlang, is_record, 2) ->
   [t_any(), t_atom()];
 arg_types(erlang, is_record, 3) ->
-  [t_any(), t_atom(), t_non_neg_fixnum()];
+  [t_any(), t_atom(), t_sup(t_non_neg_fixnum(),t_atom())];
 arg_types(erlang, is_reference, 1) ->
   [t_any()];
 arg_types(erlang, is_tuple, 1) ->

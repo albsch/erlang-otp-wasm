@@ -380,15 +380,17 @@ format_erlang_error(element, [Index, Tuple], _) ->
      must_be_tuple(Tuple)];
 format_erlang_error(exit, [_,_], _) ->
     [bad_destination];
-format_erlang_error(exit, [_,_,Options], Cause) ->
+format_erlang_error(exit, [_,_,_]=Args, Cause) ->
+    format_erlang_error(exit_signal, Args, Cause);
+format_erlang_error(exit_signal, [_,_], _) ->
+    [bad_destination];
+format_erlang_error(exit_signal, [_,_,Options], Cause) ->
     case Cause of
         badopt ->
             [[],[],must_be_list(Options, bad_option)];
         _ ->
             [bad_destination]
     end;
-format_erlang_error(exit_signal, [_,_], _) ->
-    [bad_destination];
 format_erlang_error(external_size, [_Term,Options], _) ->
     [[],must_be_option_list(Options)];
 format_erlang_error(float, [_], _) ->
@@ -477,6 +479,8 @@ format_erlang_error(is_function, [_,Arity], _) ->
          is_integer(Arity) -> range;
          true -> not_integer
      end];
+format_erlang_error(is_integer, [_,_,_], _) ->
+    [not_integer];
 format_erlang_error(is_map_key, [_,_], _) ->
     [[],not_map];
 format_erlang_error(is_process_alive, [Arg], _) ->

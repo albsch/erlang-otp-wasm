@@ -7,7 +7,7 @@
 % Copyright Ericsson AB 2014-2025. All Rights Reserved.
 %
 % %CopyrightEnd%
-{"4.0.3",
+{"4.1",
  [{<<".*">>,[{restart_application, syntax_tools}]}],
  [{<<".*">>,[{restart_application, syntax_tools}]}]
 }.

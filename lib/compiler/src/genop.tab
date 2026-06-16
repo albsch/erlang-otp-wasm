@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 1998-2025. All Rights Reserved.
+# Copyright Ericsson AB 1998-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -327,6 +327,9 @@ BEAM_FORMAT_NUMBER=0
 ## @spec set_tuple_element NewElement Tuple Position
 ## @doc  Update the element at position Position of the tuple Tuple
 ##       with the new element NewElement.
+##
+##       TODO: As of Erlang/OTP 29, this instruction is no longer emitted
+##       by the compiler.
 67: set_tuple_element/3
 
 #
@@ -481,7 +484,7 @@ BEAM_FORMAT_NUMBER=0
 
 # R12B
 130: -bs_context_to_binary/1
-131: bs_test_unit/3
+131: -bs_test_unit/3
 132: bs_match_string/4
 133: bs_init_writable/0
 134: -bs_append/8
@@ -707,3 +710,48 @@ BEAM_FORMAT_NUMBER=0
 ##       * {atom,entry}       - Function entry.
 ##       * {atom,line}        - Any other line in the function.
 184: debug_line/4
+
+# OTP 29
+
+## @spec bif3 Lbl Bif Arg1 Arg2 Arg3 Reg
+## @doc Call the bif Bif with the arguments Arg1, Arg2, and Arg3,
+##      and store the result in Reg.
+##      On failure jump to Lbl.
+185: bif3/6
+
+## @spec is_any_native_record Lbl Term
+## @doc Check whether Term is a native record. Jump to label Lbl if not.
+186: is_any_native_record/2
+
+## @spec is_native_record Lbl Rec Module Name
+## @doc Check whether record Rec is the record Name defined in module Module.
+##      Jump to label Lbl if not.
+187: is_native_record/4
+
+## @spec get_record_elements Lbl Rec Elements=[FieldName, Register]
+## @doc Extract the values for each field name and store into the corresponding
+##      register. Jump to label if any field name is not in the native record.
+188: get_record_elements/3
+
+## @spec put_record_elements Lbl Id Src Dst Live Updates
+## @doc Create (Src is nil) or update (Src is a register) a native record.
+##      Fail with an exception if creation/update fails. (Lbl is reserved
+##      for potential future release; it must be 0.)
+189: put_record/6
+
+## @spec is_record_accessible/2 Lbl Rec Scope
+## @doc Check whether the fields of native record Rec are accessible from
+##      the executing module. Jump to label Lbl if not (Rec is defined in
+##      another module and is not exported).
+##
+##      Scope is any of:
+##
+##      * {atom,external}         - Must always be exported.
+##      * {atom,auto_local}       - Need not be exported if same module.
+190: is_record_accessible/3
+
+## @spec get_record_field/5 Lbl Rec Id Field Dst
+## @doc Get a single field from a record. If Lbl is 0, raise an exception
+##      if extracting the value fails; otherwise, jump to label Lbl if
+##      extraction fails.
+191: get_record_field/5

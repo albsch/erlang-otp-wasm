@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -126,7 +126,6 @@ do {									\
         dst = x(loader_x_reg_index(dst));       \
         break;					\
      case LOADER_Y_REG:				\
-        ASSERT(loader_y_reg_index(dst) >= 1);	\
         dst = y(loader_y_reg_index(dst));       \
         break;					\
      }						\
@@ -216,7 +215,7 @@ do {						\
 #define DTRACE_GLOBAL_CALL_FROM_EXPORT(p,e)                               \
     do {                                                                  \
         if (DTRACE_ENABLED(global_function_entry)) {                      \
-            ErtsDispatchable *disp__ = &(e)->dispatch;                    \
+            const ErtsDispatchable *disp__ = &(e)->dispatch;              \
             ErtsCodePtr fp__ = disp__->addresses[erts_active_code_ix()];  \
             DTRACE_GLOBAL_CALL((p), erts_code_to_codemfa(fp__));          \
         }                                                                 \

@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application, ftp,
  [{description, "FTP client"},
-  {vsn, "1.2.4"},
+  {vsn, "1.2.6"},
   {registered, []},
   {mod, { ftp_app, []}},
   {applications,

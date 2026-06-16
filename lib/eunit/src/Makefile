@@ -53,7 +53,7 @@ EBIN = ../ebin
 INCLUDE=../include
 
 ERL_COMPILE_FLAGS += -pa $(EBIN) -pa ../../stdlib/ebin -I$(INCLUDE) \
-	 +warn_deprecated_catch +warn_unused_import -Werror
+	+warn_deprecated_catch +warn_obsolete_bool_op +warn_unused_import -Werror
 
 PARSE_TRANSFORM = eunit_autoexport.erl
 
@@ -72,6 +72,8 @@ SOURCES= \
 	eunit_data.erl \
 	eunit_tty.erl \
 	eunit_surefire.erl \
+
+ERL_FILES=$(PARSE_TRANSFORM) $(BEHAVIOUR_SOURCES) $(SOURCES)
 
 INCLUDE_FILES = eunit.hrl
 
@@ -125,9 +127,6 @@ info:
 
 realclean: clean
 
-$(EBIN)/%.$(EMULATOR):%.erl
-	$(erlc_verbose)erlc -W $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
-
 $(OBJECTS): $(PARSE_TRANSFORM_BIN)
 
 # ----------------------------------------------------
@@ -156,3 +155,8 @@ release_spec: opt
 
 release_docs_spec:
 
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+EXTRA_DEP_DEPENDENCIES=$(PARSE_TRANSFORM_BIN)
+include $(ERL_TOP)/make/dep.mk

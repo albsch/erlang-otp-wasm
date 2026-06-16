@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,6 +38,9 @@
 
 -module(beam_ssa_opt).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 -export([module/2]).
 
 -include("beam_ssa_opt.hrl").
@@ -269,6 +272,7 @@ module_passes(Opts) ->
 %% are repeated as required.
 repeated_passes(Opts) ->
     Ps = [?PASS(ssa_opt_live),
+          ?PASS(ssa_opt_is_between),
           ?PASS(ssa_opt_ne),
           ?PASS(ssa_opt_bs_create_bin),
           ?PASS(ssa_opt_dead),
@@ -298,7 +302,8 @@ early_epilogue_passes(Opts) ->
     Ps = [?PASS(ssa_opt_type_finish),
           ?PASS(ssa_opt_float),
           ?PASS(ssa_opt_sw),
-          ?PASS(ssa_opt_no_reuse)],
+          ?PASS(ssa_opt_no_reuse),
+          ?PASS(ssa_opt_deoptimize_update_tuple)],
     passes_1(Ps, Opts).
 
 late_epilogue_passes(Opts) ->
@@ -323,9 +328,7 @@ late_epilogue_passes(Opts) ->
 passes_1(Ps, Opts0) ->
     Negations = [{list_to_atom("no_"++atom_to_list(N)),N} ||
                     {N,_} <:- Ps],
-    Expansions = [{no_bs_match,[no_ssa_opt_bs_ensure,no_bs_match]}],
-    Opts = proplists:normalize(Opts0, [{expand,Expansions},
-                                       {negations,Negations}]),
+    Opts = proplists:normalize(Opts0, [{negations,Negations}]),
     [case proplists:get_value(Name, Opts, true) of
          true ->
              P;
@@ -357,48 +360,49 @@ fdb_fs([#b_function{ args=Args,bs=Bs }=F | Fs], Exports, FuncDb0) ->
     Exported = gb_sets:is_element({Name, Arity}, Exports),
     ArgTypes = duplicate(length(Args), #{}),
 
-    FuncDb1 = case FuncDb0 of
-                  %% We may have an entry already if someone's called us.
-                  #{ Id := Info } ->
-                      FuncDb0#{ Id := Info#func_info{ exported=Exported,
-                                                      arg_types=ArgTypes }};
-                  #{} ->
-                      FuncDb0#{ Id => #func_info{ exported=Exported,
-                                                  arg_types=ArgTypes }}
-              end,
-
     RPO = beam_ssa:rpo(Bs),
-    FuncDb = beam_ssa:fold_blocks(fun(_L, #b_blk{is=Is}, FuncDb) ->
-                                       fdb_is(Is, Id, FuncDb)
-                               end, RPO, FuncDb1, Bs),
+    Callees0 = beam_ssa:fold_blocks(fun(_L, #b_blk{is=Is}, Acc) ->
+                                            fdb_is(Is, Acc)
+                                    end, RPO, [], Bs),
+    Callees = ordsets:from_list(Callees0),
+
+    CallerVertex0 = maps:get(Id, FuncDb0, #func_info{}),
+    CallerVertex = CallerVertex0#func_info{exported=Exported,
+                                           arg_types=ArgTypes,
+                                           out=Callees},
+    FuncDb = FuncDb0#{Id => CallerVertex},
 
     fdb_fs(Fs, Exports, FuncDb);
-fdb_fs([], _Exports, FuncDb) ->
-    FuncDb.
+fdb_fs([], _Exports, FuncDb0) ->
+    S0 = [{Caller,Callees} || Caller := #func_info{out=Callees} <:- FuncDb0],
+    S1 = sofs:family(S0),
+    S2 = sofs:family_to_relation(S1),
+    S3 = sofs:converse(S2),
+    S4 = sofs:relation_to_family(S3),
+    S = sofs:to_external(S4),
+    fdb_update_callees(S, FuncDb0).
 
 fdb_is([#b_set{op=call,
                args=[#b_local{}=Callee | _]} | Is],
-       Caller, FuncDb) ->
-    fdb_is(Is, Caller, fdb_update(Caller, Callee, FuncDb));
+       Acc) ->
+    fdb_is(Is, [Callee|Acc]);
 fdb_is([#b_set{op=make_fun,args=[#b_local{}=Callee | _]} | Is],
-       Caller, FuncDb) ->
+       Acc) ->
     %% The make_fun instruction's type depends on the return type of the
     %% function in question, so we treat this as a function call.
-    fdb_is(Is, Caller, fdb_update(Caller, Callee, FuncDb));
-fdb_is([_ | Is], Caller, FuncDb) ->
-    fdb_is(Is, Caller, FuncDb);
-fdb_is([], _Caller, FuncDb) ->
+    fdb_is(Is, [Callee|Acc]);
+fdb_is([_ | Is], Acc) ->
+    fdb_is(Is, Acc);
+fdb_is([], Acc) ->
+    Acc.
+
+fdb_update_callees([{Callee,CalledBy}|Calls], FuncDb0) ->
+    CalleeVertex = map_get(Callee, FuncDb0),
+    FuncDb = FuncDb0#{Callee := CalleeVertex#func_info{in=CalledBy}},
+    fdb_update_callees(Calls, FuncDb);
+fdb_update_callees([], FuncDb) ->
     FuncDb.
 
-fdb_update(Caller, Callee, FuncDb) ->
-    CallerVertex = maps:get(Caller, FuncDb, #func_info{}),
-    CalleeVertex = maps:get(Callee, FuncDb, #func_info{}),
-
-    Calls = ordsets:add_element(Callee, CallerVertex#func_info.out),
-    CalledBy = ordsets:add_element(Caller, CalleeVertex#func_info.in),
-
-    FuncDb#{ Caller => CallerVertex#func_info{out=Calls},
-             Callee => CalleeVertex#func_info{in=CalledBy} }.
 
 %% Returns the post-order of all local calls in this module. That is,
 %% called functions will be ordered before the functions calling them.
@@ -550,7 +554,8 @@ merge_tuple_update_1([], Tuple) ->
 %%%
 
 ssa_opt_split_blocks({#opt_st{ssa=Blocks0,cnt=Count0}=St, FuncDb}) ->
-    P = fun(#b_set{op={bif,element}}) -> true;
+    P = fun(#b_set{op={bif,is_integer},args=[_,_,_]}) -> true;
+           (#b_set{op={bif,element}}) -> true;
            (#b_set{op=call}) -> true;
            (#b_set{op=bs_init_writable}) -> true;
            (#b_set{op=make_fun}) -> true;
@@ -559,6 +564,53 @@ ssa_opt_split_blocks({#opt_st{ssa=Blocks0,cnt=Count0}=St, FuncDb}) ->
     RPO = beam_ssa:rpo(Blocks0),
     {Blocks,Count} = beam_ssa:split_blocks_before(RPO, P, Blocks0, Count0),
     {St#opt_st{ssa=Blocks,cnt=Count}, FuncDb}.
+
+%%%
+%%% BIF is_integer/3 tests whether a number is between a given range.
+%%% When the range is constant, rewrite it into 3 BIFs: is_integer/1 and two
+%%% =<'s to enable later optimization.
+%%%
+ssa_opt_is_between({#opt_st{ssa=Blocks0,cnt=Count0}=St, FuncDb}) ->
+    {Blocks1, Count1} = ssa_opt_is_between_1(Blocks0, Count0),
+    {St#opt_st{ssa=Blocks1,cnt=Count1}, FuncDb}.
+
+ssa_opt_is_between_1([{L,#b_blk{}=B}=Blk0|Ls0], Count0) ->
+    case B of
+        #b_blk{is=[#b_set{op={bif,is_integer},dst=Bool1,
+                          args=[_,#b_literal{val=Min},
+                                #b_literal{val=Max}]}],
+               last=#b_br{bool=Bool1}}=Blk when is_integer(Min),
+                                                is_integer(Max),
+                                                Min =< Max ->
+            {Blk1, Count1} = is_between_rewrite(Count0, L, Blk),
+            {Ls1, Count2} = ssa_opt_is_between_1(Ls0, Count1),
+            {Blk1++Ls1, Count2};
+        #b_blk{} ->
+            {Ls1, Count1} = ssa_opt_is_between_1(Ls0, Count0),
+            {[Blk0|Ls1], Count1}
+    end;
+ssa_opt_is_between_1([], Count0) ->
+    {[], Count0}.
+
+is_between_rewrite(Count0, L, Blk0) ->
+    LowerL = Count0,
+    UpperL = Count0 + 1,
+    LowerBool = #b_var{name=Count0},
+    UpperBool = #b_var{name=Count0 + 1},
+    Count = Count0 + 2,
+    #b_blk{is=[#b_set{dst=Bool1,args=[Term,LB,UB]}|_],
+           last=#b_br{fail=Fail}=Br0} = Blk0,
+    Blk1 = Blk0#b_blk{is=[#b_set{op={bif,is_integer},dst=Bool1,
+                                 args=[Term]}],
+                      last=#b_br{bool=Bool1,succ=LowerL,fail=Fail}},
+    BlkLower = #b_blk{is=[#b_set{op={bif,'=<'},dst=LowerBool,
+                                 args=[LB,Term]}],
+                      last=#b_br{bool=LowerBool,succ=UpperL,fail=Fail}},
+    BlkUpper = #b_blk{is=[#b_set{op={bif,'=<'},dst=UpperBool,
+                                 args=[Term,UB]}],
+                      last=Br0#b_br{bool=UpperBool}},
+    Blocks = [{L, Blk1}, {LowerL, BlkLower}, {UpperL, BlkUpper}],
+    {Blocks, Count}.
 
 %%%
 %%% Coalesce phi nodes.
@@ -809,7 +861,7 @@ are_all_literals(Args) ->
 ssa_opt_element({#opt_st{ssa=Blocks}=St, FuncDb}) ->
     %% Collect the information about element instructions in this
     %% function.
-    GetEls = collect_element_calls(beam_ssa:linearize(Blocks)),
+    GetEls = collect_element_calls(beam_ssa:linearize_only(Blocks)),
 
     %% Collect the element instructions into chains. The
     %% element calls in each chain are ordered in reverse
@@ -1585,7 +1637,7 @@ ssa_opt_live({#opt_st{ssa=Linear0}=St, FuncDb}) ->
     RevLinear = reverse(Linear0),
     Blocks0 = maps:from_list(RevLinear),
     Blocks = live_opt(RevLinear, #{}, Blocks0),
-    Linear = beam_ssa:linearize(Blocks),
+    Linear = beam_ssa:linearize_only(Blocks),
     {St#opt_st{ssa=Linear}, FuncDb}.
 
 live_opt([{L,Blk0}|Bs], LiveMap0, Blocks) ->
@@ -1714,7 +1766,7 @@ ssa_opt_try({#opt_st{ssa=SSA0,cnt=Count0}=St, FuncDb}) ->
     {St#opt_st{ssa=SSA,cnt=Count}, FuncDb}.
 
 opt_try(Blocks, Count0) when is_map(Blocks) ->
-    {Count, Linear} = opt_try(beam_ssa:linearize(Blocks), Count0),
+    {Count, Linear} = opt_try(beam_ssa:linearize_only(Blocks), Count0),
     {Count, maps:from_list(Linear)};
 opt_try(Linear, Count0) when is_list(Linear) ->
     {Count, Shrunk} = shrink_try(Linear, Count0, []),
@@ -2806,7 +2858,7 @@ do_ssa_opt_sink(Defs, #opt_st{ssa=Linear}=St) when is_map(Defs) ->
                            move_defs(V, From, To, A)
                    end, Blocks0, DefLocs),
 
-    St#opt_st{ssa=beam_ssa:linearize(Blocks)}.
+    St#opt_st{ssa=beam_ssa:linearize_only(Blocks)}.
 
 def_blocks([{L,#b_blk{is=Is}}|Bs]) ->
     def_blocks_is(Is, L, def_blocks(Bs));
@@ -3303,7 +3355,7 @@ unfold_literals([], _, _, Blocks) ->
     Blocks.
 
 unfold_update_succ([S|Ss], Safe, SafeMap0) ->
-    F = fun(Prev) -> Prev and Safe end,
+    F = fun(Prev) -> Prev andalso Safe end,
     SafeMap = maps:update_with(S, F, Safe, SafeMap0),
     unfold_update_succ(Ss, Safe, SafeMap);
 unfold_update_succ([], _, SafeMap) ->
@@ -3831,6 +3883,79 @@ cannot_reuse([V|Values], New) ->
     sets:is_element(V, New) orelse cannot_reuse(Values, New);
 cannot_reuse([], _New) ->
     false.
+
+
+%%%
+%%% Undo the merging of `update_tuple` instructions performed by the
+%%% beam_ssa_update_tuple sub-pass. The beam_ssa_pre_codegen pass will soon
+%%% convert each `update_tuple` pseudo-instruction back into a setelement/3
+%%% call. To minimize the number of such calls, each `update_tuple`
+%%% instruction should ideally update only a single element of the tuple.
+%%%
+
+ssa_opt_deoptimize_update_tuple({#opt_st{ssa=Linear0}=St, FuncDb})
+  when is_list(Linear0) ->
+    Linear = deoptimize_update_tuple(Linear0),
+    {St#opt_st{ssa=Linear}, FuncDb}.
+
+deoptimize_update_tuple(Linear) ->
+    Map = #{0 => #{}},
+    deoptimize_update_tuple(Linear, Map).
+
+deoptimize_update_tuple([{L,Blk0}|Bs], Map0) ->
+    Data0 = maps:get(L, Map0, #{}),
+    #b_blk{is=Is0} = Blk0,
+    {Is,Data} = deoptimize_update_tuple_is(Is0, Data0, []),
+    Blk = if
+              Is =:= Is0 -> Blk0;
+              true -> Blk0#b_blk{is=Is}
+          end,
+    Successors = beam_ssa:successors(Blk),
+    Map = dut_update_successors(Successors, Data, Map0),
+    [{L,Blk}|deoptimize_update_tuple(Bs, Map)];
+deoptimize_update_tuple([], _) ->
+    [].
+
+dut_update_successors([L|Ls], Data0, Map) ->
+    case Map of
+        #{L := Data1} ->
+            Data = maps:intersect(Data1, Data0),
+            dut_update_successors(Ls, Data0, Map#{L := Data});
+        #{} ->
+            dut_update_successors(Ls, Data0, Map#{L => Data0})
+    end;
+dut_update_successors([], _, Map) ->
+    Map.
+
+deoptimize_update_tuple_is([#b_set{op=update_tuple,dst=Dst,
+                                   args=Args0}=I0|Is], Data0, Acc) ->
+    [Src|Args1] = Args0,
+    Args = dut_simplify(Src, Args1, Data0),
+    I = I0#b_set{args=Args},
+    Data = Data0#{Dst => {Src,Args1}},
+    deoptimize_update_tuple_is(Is, Data, [I|Acc]);
+deoptimize_update_tuple_is([I|Is], Data, Acc) ->
+    deoptimize_update_tuple_is(Is, Data, [I|Acc]);
+deoptimize_update_tuple_is([], Data, Acc) ->
+    {reverse(Acc),Data}.
+
+dut_simplify(Src, Args0, Data) ->
+    L0 = [{V,dut_simplify_1(Args0, As)} || V := {S,As} <:- Data, S =:= Src],
+    L1 = [{length(As),[V|As]} || {V,As} <:- L0, As =/= none],
+    case sort(L1) of
+        [] ->
+            [Src|Args0];
+        [{_,Args}|_] ->
+            Args
+    end.
+
+dut_simplify_1([P,V|Args], [P,V|As]) ->
+    dut_simplify_1(Args, As);
+dut_simplify_1([_|_]=Args, []) ->
+    Args;
+dut_simplify_1(_, _) ->
+    none.
+
 
 %%%
 %%% Common utilities.

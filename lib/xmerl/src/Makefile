@@ -2,9 +2,9 @@
 # %CopyrightBegin%
 #
 # SPDX-License-Identifier: Apache-2.0
-# 
-# Copyright Ericsson AB 2003-2025. All Rights Reserved.
-# 
+#
+# Copyright Ericsson AB 2003-2026. All Rights Reserved.
+#
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
 # You may obtain a copy of the License at
@@ -16,7 +16,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-# 
+#
 # %CopyrightEnd%
 #
 #
@@ -127,12 +127,20 @@ TARGET_FILES = $(MODULES:%=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
 # ----------------------------------------------------
 ERL_COMPILE_FLAGS += \
 		-I ../include \
-		+warn_unused_vars
+		+warn_unused_vars +warn_obsolete_bool_op
 
 #		+bin_opt_info 
 
 ifeq ($(ERL_DETERMINISTIC),yes)
 	DETERMINISM_FLAG = +deterministic
+	DEP_SKIP_FILES = xmerl_b64Bin.erl \
+		xmerl_xpath_parse.erl \
+		xmerl_xsd_re_parse.erl \
+		xmerl_sax_parser_list.erl \
+		xmerl_sax_parser_latin1.erl \
+		xmerl_sax_parser_utf8.erl \
+		xmerl_sax_parser_utf16be.erl \
+		xmerl_sax_parser_utf16le.erl
 else
 	DETERMINISM_FLAG =
 endif
@@ -241,23 +249,7 @@ release_docs_spec:
 
 release_tests_spec:
 
-
-#------------------------------------------------------------
-# .hrl dependencies
-$(EBIN)/xmerl.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_lib.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_scan.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xlate.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xml.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_html.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_text.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_eventp.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_simple.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xpath.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xpath_lib.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xpath_pred.beam:../include/xmerl.hrl
-$(EBIN)/xmerl_xpath_scan.beam:../include/xmerl.hrl
-#$(EBIN)/xmerl_xsd.beam:../include/xmerl_xsd.hrl
-#$(EBIN)/xmerl_xsd.beam:../include/xmerl.hrl
-
-
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

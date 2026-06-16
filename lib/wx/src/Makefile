@@ -28,7 +28,7 @@ EGEN = gen
 EBIN = ../ebin
 ERLC = erlc
 ERLINC = ../include
-ERL_COMPILE_FLAGS += -I$(ERLINC) +warn_unused_vars +nowarn_missing_doc
+ERL_COMPILE_FLAGS += -I$(ERLINC) -I${ERL_TOP}/lib +warn_unused_vars +nowarn_missing_doc +warn_obsolete_bool_op +nowarn_deprecated_catch
 
 ifeq ($(CAN_BUILD_DRIVER), true)
 ERL_COMPILE_FLAGS += -DCAN_BUILD_DRIVER
@@ -131,3 +131,8 @@ release_spec: opt
 #	$(INSTALL_DATA) ../$(ARCHIVE) $(RELEASE_PATH)/lib
 
 release_docs_spec:
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

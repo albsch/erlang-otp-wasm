@@ -2,9 +2,9 @@
 %% %CopyrightBegin%
 %%
 %% SPDX-License-Identifier: Apache-2.0
-%% 
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
-%% 
+%%
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
+%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
@@ -16,7 +16,7 @@
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %% See the License for the specific language governing permissions and
 %% limitations under the License.
-%% 
+%%
 %% %CopyrightEnd%
 %%
 -module(erl_error).
@@ -28,12 +28,10 @@ It is possible for the module raising an error to provide additional information
 by calling [`error/3`](`erlang:error/3`) with extra error information. More
 details about this mechanism is described in
 [EEP-54](https://www.erlang.org/erlang-enhancement-proposals/eep-0054.html).
-
-## Callback Functions
-
-The following functions are to be exported from an Error Info handler.
 """.
 -moduledoc(#{since => "OTP 24.0"}).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 %% Supported and documented exported functions in this module.
 -export([format_exception/3, format_exception/4]).
@@ -350,6 +348,8 @@ explain_reason({badarity,{Fun,As}}, error, [], _PF, _S, Enc, _CL)
     %% Only the arity is displayed, not the arguments As.
     io_lib:fwrite(<<"~ts called with ~s">>,
                   [format_fun(Fun, Enc), argss(length(As))]);
+explain_reason({badfield,F}, error, [], _PF, _S, _Enc, _CL) ->
+    io_lib:bformat(<<"bad field name: ~ts">>, [format_record(F)]);
 explain_reason({badfun,Term}, error=Cl, [], PF, S, _Enc, CL) ->
     format_value(Term, <<"bad function ">>, Cl, PF, S, CL);
 explain_reason({badmatch,Term}, error=Cl, [], PF, S, _Enc, CL) ->
@@ -418,10 +418,15 @@ explain_reason(restricted_shell_stopped, exit, [], _PF, _S, _Enc, _CL) ->
     <<"restricted shell stopped">>;
 explain_reason(calling_self, exit, [], _PF, _S, _Enc, _CL) ->
     <<"the current process attempted to call itself">>;
+explain_reason({novalue,Name}, error, [], _PF, _S, _Enc, _CL) ->
+    io_lib:fwrite(~"no value provided for field ~ts", [format_record(Name)]);
 %% Other exit code:
 explain_reason(Reason, Class, [], PF, S, _Enc, CL) ->
     {L, _} = PF(Reason, (iolist_size(S)+1) + exited_size(Class), CL),
     L.
+
+format_record({{M, N},F}) ->
+    io_lib:bformat(~"~w in #~w:~w{}", [F, M, N]).
 
 n_args(A) when is_integer(A) ->
     A;
@@ -566,7 +571,7 @@ format_call(ErrStr, Pre1, ForMForFun, As, PF, Enc, CL) ->
              S2 = pp_arguments(PF, As, string:length([Pre1|MFs]), Enc, CL),
              S3 = pp_arguments(PF, [a2345,b2345], I1, Enc, CL),
              Long = count_nl(S3) > 0,
-             case Long or (count_nl(S2) < count_nl(S1)) of
+             case Long orelse count_nl(S2) < count_nl(S1) of
                  true ->
                      [$\n, Pre1, MFs, S2];
                  false ->

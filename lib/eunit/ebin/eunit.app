@@ -8,7 +8,7 @@
 %% %CopyrightEnd%
 {application, eunit,
  [{description, "EUnit"},
-  {vsn, "2.10.3"},
+  {vsn, "2.11"},
   {modules, [eunit,
 	     eunit_autoexport,
 	     eunit_data,
@@ -25,4 +25,4 @@
   {registered,[]},
   {applications, [kernel,stdlib]},
   {env, []},
-  {runtime_dependencies, ["stdlib-6.0","kernel-8.3","erts-9.0"]}]}.
+  {runtime_dependencies, ["stdlib-6.0","kernel-11.0","erts-9.0"]}]}.

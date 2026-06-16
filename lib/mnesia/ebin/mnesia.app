@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application, mnesia,
  [{description, "MNESIA  CXC 138 12"},
-  {vsn, "4.25.3"},
+  {vsn, "4.26.1"},
   {modules, [
 	     mnesia,
 	     mnesia_app,

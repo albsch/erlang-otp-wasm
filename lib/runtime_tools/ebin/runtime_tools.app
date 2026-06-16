@@ -21,7 +21,7 @@
 %%
 {application, runtime_tools,
    [{description,  "RUNTIME_TOOLS"},
-    {vsn,          "2.3.1"},
+    {vsn,          "2.4"},
     {modules,      [appmon_info, dbg,observer_backend,runtime_tools,
                     runtime_tools_sup,erts_alloc_config,
 		    ttb_autostart,dyntrace,system_information,

@@ -172,6 +172,23 @@ AS_HELP_STRING([--enable-lock-checking], [enable lock checking]),
 ],
   enable_lock_check=no)
 
+AC_ARG_ENABLE(encrypted-crash-dumps,
+AS_HELP_STRING([--enable-encrypted-crash-dumps], [enable encrypted crash dumps]),
+[ case "$enableval" in
+    no) enable_encrypted_crash_dumps=no ;;
+    *)  enable_encrypted_crash_dumps=yes ;;
+  esac
+],
+  enable_encrypted_crash_dumps=no)
+
+if test "x$enable_encrypted_crash_dumps" = "xno"; then
+    ENCRYPTED_CRASH_DUMPS=no
+else
+    ENCRYPTED_CRASH_DUMPS=yes
+fi
+
+AC_SUBST(ENCRYPTED_CRASH_DUMPS)
+
 AC_ARG_ENABLE(lock-counter,
 AS_HELP_STRING([--enable-lock-counter], [enable lock counters]),
 [ case "$enableval" in
@@ -607,16 +624,17 @@ AS_IF([test "x$GCC" = xyes],
   # such dubious duplicates.
   LM_TRY_ENABLE_CFLAG([-fno-common], [CFLAGS])
 
-  # Make -fvisibility=hidden usable if supported. Currently only used by
-  # our PCRE2 to avoid symbol clashes with real PCRE2 if dynamically loaded.
-  LM_TRY_ENABLE_CFLAG([-fvisibility=hidden], [VISIBILITY_HIDDEN])
+  # Use -fvisibility=hidden to only export selected symbols
+  # such as NIF and driver APIs.
+  LM_TRY_ENABLE_CFLAG([-fvisibility=hidden], [CFLAGS])
+  if test "$can_enable_flag" = false; then
+    AC_MSG_ERROR([Compiler option -fvisibility=hidden not supported])
+  fi
  ],
  [
   WFLAGS=""
   WERRORFLAGS=${WERRORFLAGS:-""}
-  VISIBILITY_HIDDEN=""
  ])
-AC_SUBST(VISIBILITY_HIDDEN)
 
 AC_MSG_CHECKING([C99 support])
 
@@ -1233,7 +1251,8 @@ AS_IF([test "x$with_termcap" != "xno" && test "X$host" != "Xwin32"],
   ])
 
 AC_SUBST(TERMCAP_LIB)
-AC_CHECK_HEADERS([termcap.h curses.h term.h])
+
+AC_CHECK_HEADERS([termcap.h ncurses/curses.h curses.h term.h])
 
 if test "x$TERMCAP_LIB" != "x"; then
 
@@ -1262,52 +1281,17 @@ AS_HELP_STRING([--disable-use-embedded-3pp-alternatives],
                 by individual --disable-builtin-* options.]),
 [ case "$enableval" in
     no)
-      builtin_errno_id=yes
       builtin_ryu=yes
-      builtin_openssl=yes
       builtin_zstd=yes
       builtin_zlib=yes
       ;;
     *)
-      builtin_errno_id=no
       builtin_ryu=no
-      builtin_openssl=no
       builtin_zstd=no
       builtin_zlib=no
       ;;
   esac
 ])
-
-dnl -------------
-dnl errno id
-dnl -------------
-
-AC_ARG_ENABLE(builtin-errno-id,
-AS_HELP_STRING([--enable-builtin-errno-id],
-               [force use of our own built-in errno-id (default)])
-AS_HELP_STRING([--disable-builtin-errno-id],
-               [try to find an alternative on the system to use for errno-id]),
-  [case "$enableval" in
-      no) builtin_errno_id=no ;;
-      *)  builtin_errno_id=yes ;;
-    esac])
-
-AC_CHECK_FUNCS([strerrorname_np])
-
-AS_IF([test "$ac_cv_func_strerrorname_np" != "yes"],
-      [
-         AS_IF([test $builtin_errno_id = no],
-               [AC_MSG_ERROR([No alternative to builtin erl_errno_id() found])])
-      ])
-
-AS_IF([test "$builtin_errno_id" != "no"],
-      [
-        builtin_errno_id=yes
-        AC_DEFINE(ERTS_USE_BUILTIN_ERRNO_ID, [1], [Define if builtin errno id should be used])
-      ])
-
-ERTS_USE_BUILTIN_ERRNO_ID=$builtin_errno_id
-AC_SUBST(ERTS_USE_BUILTIN_ERRNO_ID)
 
 dnl -------------
 dnl ryu (float to short string)
@@ -1324,38 +1308,14 @@ AS_HELP_STRING([--disable-builtin-ryu],
    esac])
 
 dnl -------------
-dnl openssl (MD5)
-dnl -------------
-
-AC_ARG_ENABLE(builtin-openssl,
-AS_HELP_STRING([--enable-builtin-openssl],
-               [use our own built-in OpenSSL for MD5 (default)])
-AS_HELP_STRING([--disable-builtin-openssl],
-               [use an alternative for built-in OpenSSL]),
-  [case "$enableval" in
-      no) builtin_openssl=no ;;
-      *)  builtin_openssl=yes ;;
-   esac])
-
-AS_IF([test "$builtin_openssl" = "no"],
-      [
-        ERTS_USE_BUILTIN_OPENSSL=no
-      ],
-      [
-        AC_DEFINE(ERTS_USE_BUILTIN_OPENSSL, [1], [Define if builtin OpenSSL should be used for MD5])
-        ERTS_USE_BUILTIN_OPENSSL=yes
-      ])
-AC_SUBST(ERTS_USE_BUILTIN_OPENSSL)
-
-dnl -------------
 dnl zstd
 dnl -------------
 
 AC_ARG_ENABLE(builtin-zstd,
 AS_HELP_STRING([--enable-builtin-zstd],
-               [force use of our own built-in zstd (default)])
+               [force use of our own built-in zstd])
 AS_HELP_STRING([--disable-builtin-zstd],
-               [try to find a static libzstd on the system to use]),
+               [try to find a static libzstd on the system to use (default)]),
   [ case "$enableval" in
       no) builtin_zstd=no ;;
       *)  builtin_zstd=yes ;;
@@ -1363,7 +1323,7 @@ AS_HELP_STRING([--disable-builtin-zstd],
 
 LIBZSTD=
 
-AS_IF([test "$builtin_zstd" = "no"],
+AS_IF([test "$builtin_zstd" != "yes"],
  [
   AC_MSG_CHECKING(for static libzstd of version 1.5.6 or higher)
   zstd_save_LIBS=$LIBS
@@ -1387,7 +1347,9 @@ error
  AC_MSG_RESULT(yes)
 ],[
  LIBZSTD=
- AC_MSG_ERROR([libzstd not found])
+ AS_IF([test "$builtin_zstd" = "no"],
+       [AC_MSG_ERROR([libzstd not found])],
+       [AC_MSG_RESULT([no, using builtin zstd instead])])
 ])
 
 LIBS="$zstd_save_LIBS"
@@ -1650,6 +1612,31 @@ AC_CHECK_MEMBERS([struct sockaddr_dl.sdl_len],
 	 #include <net/if_dl.h>
 	 #endif
 	])
+
+dnl
+dnl On some platforms (Linux) the SCTP_DATA_UNSENT and SCTP_DATA_SENT flags
+dnl are defined with 'enum' (meaning "#if defined(...) does not work) but
+dnl on others (FreeBSD) they are defined with '#define ...'.
+dnl So to simplyfy the code we create our own flags for if-def testing.
+dnl
+AC_CHECK_DECL(SCTP_DATA_UNSENT,
+        [AC_DEFINE(ESOCK_SCTP_DATA_UNSENT, [], [SCTP flag DATA-UNSENT defined])],
+        [],
+        [
+         #if HAVE_SYS_SOCKET_H
+         #include <sys/socket.h>
+         #endif
+         #include <netinet/sctp.h>
+        ])
+AC_CHECK_DECL(SCTP_DATA_SENT,
+        [AC_DEFINE(ESOCK_SCTP_DATA_SENT, [], [SCTP flag DATA-SENT defined])],
+        [],
+        [
+         #if HAVE_SYS_SOCKET_H
+         #include <sys/socket.h>
+         #endif
+         #include <netinet/sctp.h>
+        ])
 
 dnl
 dnl This test kindly borrowed from Tcl
@@ -1963,13 +1950,15 @@ case "x$enable_sctp" in
 	fi;;
 esac
 
+dnl Check how the members of struct sctp_send_failed_event
+dnl are named: on linux prefixed by ssf_ but on freesd by ssfe_
 AS_IF([test x"$ac_cv_header_netinet_sctp_h" = x"yes"],
   [
     AS_IF([test "x$enable_sctp" = "xlib"],
         AC_CHECK_LIB(sctp, sctp_bindx))
     AC_CHECK_FUNCS([sctp_bindx sctp_peeloff sctp_getladdrs sctp_freeladdrs sctp_getpaddrs sctp_freepaddrs \
                     sctp_connectx])
-        AC_CHECK_MEMBERS([struct sctp_accoc_value.assoc_id], [], [],
+        AC_CHECK_MEMBERS([struct sctp_assoc_value.assoc_id], [], [],
         [#if HAVE_SYS_SOCKET_H
          #include <sys/socket.h>
          #endif
@@ -1994,13 +1983,28 @@ AS_IF([test x"$ac_cv_header_netinet_sctp_h" = x"yes"],
          #endif
          #include <netinet/sctp.h>
         ])
-    AC_CHECK_MEMBERS([struct sctp_paddrparams.spp_pathmtu,
+    AC_CHECK_MEMBERS([struct sctp_assoc_stats.sas_assoc_id,
+                      struct sctp_assoc_stats.sas_obs_rto_ipaddr,
+                      struct sctp_assoc_stats.sas_opackets,
+                      struct sctp_assoc_stats.sas_ipackets,
+                      struct sctp_assoc_stats.sas_outofseqtsns,
+                      struct sctp_paddrparams.spp_pathmtu,
                       struct sctp_paddrparams.spp_sackdelay,
                       struct sctp_paddrparams.spp_flags,
+                      struct sctp_paddrparams.spp_pv6_flowlabel,
+                      struct sctp_paddrparams.spp_dscp,
+                      struct sctp_pdapi_event.pdapi_stream,
+                      struct sctp_pdapi_event.pdapi_seq,
                       struct sctp_remote_error.sre_data,
                       struct sctp_send_failed.ssf_data,
+                      struct sctp_send_failed_event.ssfe_data,
                       struct sctp_event_subscribe.sctp_authentication_event,
-                      struct sctp_event_subscribe.sctp_sender_dry_event], [], [],
+                      struct sctp_event_subscribe.sctp_sender_dry_event,
+                      struct sctp_event_subscribe.sctp_stream_reset_event,
+                      struct sctp_event_subscribe.sctp_assoc_reset_event,
+                      struct sctp_event_subscribe.sctp_stream_change_event,
+                      struct sctp_stream_reset_event.strreset_stream_list,
+                      struct sctp_stream_reset_event.strreset_list], [], [],
         [#if HAVE_SYS_SOCKET_H
          #include <sys/socket.h>
          #endif
@@ -2231,6 +2235,15 @@ AS_CASE([$host_os],
 		LIBS="$LIBS -lmswsock"
 	])
 
+dnl Check for recvmmsg and sendmmsg (Linux and BSD, not Darwin/Windows)
+AS_CASE([$host_os],
+        [linux*|freebsd*|dragonfly*|openbsd*|netbsd*],
+        [
+                AC_CHECK_FUNCS([recvmmsg sendmmsg], [], [],
+                        [[#include <sys/socket.h>]])
+        ])
+
+
 dnl ----------------------------------------------------------------------
 dnl Checks for library functions.
 dnl ----------------------------------------------------------------------
@@ -2348,7 +2361,7 @@ fi
 AC_CHECK_FUNCS([getipnodebyname getipnodebyaddr gethostbyname2])
 
 AC_CHECK_FUNCS([ieee_handler fpsetmask finite isnan isinf res_gethostbyname dlopen \
-		dlvsym pread pwrite memmove strerror strerror_r strncasecmp \
+		dlvsym pread pwrite memmove strerror strerror_r strerrorname_np strncasecmp \
 		gethrtime localtime_r gmtime_r mprotect madvise posix_madvise \
 		mmap mremap memcpy memrchr mallopt sbrk _sbrk __sbrk brk _brk __brk \
 		flockfile fstat strlcpy strlcat setsid posix2time time2posix \
@@ -2374,7 +2387,7 @@ else
 fi
 
 AC_MSG_CHECKING([for isfinite])
-AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <math.h>]], [[isfinite(0);]])],[have_isfinite=yes],[have_isfinite=no])
+AC_LINK_IFELSE([AC_LANG_PROGRAM([[#include <math.h>]], [[isfinite(0.0);]])],[have_isfinite=yes],[have_isfinite=no])
 
 if test $have_isfinite = yes; then
     AC_DEFINE(HAVE_ISFINITE,[1],
@@ -3103,18 +3116,42 @@ AS_IF([test ${enable_jit} != no -o "$builtin_ryu" = "no"],
           AC_LANG_PUSH(C++)
           old_CXXFLAGS=$CXXFLAGS
           CXXFLAGS="$CXXFLAGS -std=c++17"
+          AC_MSG_CHECKING([for C++17 support])
           AC_COMPILE_IFELSE(
               [AC_LANG_PROGRAM([[]],
                [[#if __cplusplus < 201703L
                 #error "Needs C++17 compiler"
-                #endif]])],
-              [AC_MSG_CHECKING([for C++17 support])
+                #endif
+                ]])
+              ],[
                AC_MSG_RESULT([yes])
-               HAVE_CXX17=true],
-              [AC_MSG_CHECKING([for C++17 support])
+               HAVE_CXX17=true
+
+               AS_IF([test "$builtin_ryu" = "no"],
+                 [
+                   AC_MSG_CHECKING([for C++ std::to_chars])
+                   AC_COMPILE_IFELSE(
+                     [AC_LANG_PROGRAM(
+                        [[
+                          #include <charconv>
+                        ]],
+                        [[
+                          char fbuf[20];
+                          std::to_chars(fbuf, fbuf + sizeof(fbuf), 3.14);
+                        ]])
+                     ],[
+                       AC_MSG_RESULT([yes])
+                     ],[
+                       AC_MSG_RESULT([no])
+                       AC_MSG_WARN([C++17 support found but no std::to_chars for floating point])
+                       AC_MSG_ERROR([Alternative to builtin ryu needs C++17 with std::to_chars])
+                     ])
+                 ])
+              ],[
                AC_MSG_RESULT([no])
                CXXFLAGS=$old_CXXFLAGS
-               HAVE_CXX17=false])
+               HAVE_CXX17=false
+              ])
           AC_LANG_POP()
          ])
        if test "$CXX" = false -o "$HAVE_CXX17" = false; then
@@ -3885,6 +3922,17 @@ AC_DEFINE_UNQUOTED(ERTS_EMU_CMDLINE_FLAGS,
 "$STATIC_CFLAGS $CFLAGS $CXXFLAGS $DEBUG_CFLAGS $DEBUG_CXXFLAGS $EMU_THR_DEFS $DEFS $WERRORFLAGS $WFLAGS",
 [The only reason ERTS_EMU_CMDLINE_FLAGS exists is to force modification
  of config.h when the emulator command line flags are modified by configure])
+
+dnl ----------------------------------------------------------------------
+dnl Include OpenSSL configuration
+dnl
+dnl This is split into a separate file to ensure a cleaner break, as it
+dnl belongs more to crypto than it does erts.
+dnl ----------------------------------------------------------------------
+
+if test "x$ENCRYPTED_CRASH_DUMPS" = "xyes"; then
+m4_include([crypto.ac])
+fi
 
 dnl ----------------------------------------------------------------------
 dnl Output the result.

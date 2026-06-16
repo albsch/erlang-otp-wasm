@@ -339,6 +339,7 @@ static erts_atomic32_t function_calls;
 static erts_atomic32_t doing_sys_schedule;
 #endif
 static erts_atomic32_t no_empty_run_queues;
+static erts_atomic32_t no_waiting_scheds;
 long erts_runq_supervision_interval = 0;
 static ethr_event runq_supervision_event;
 static erts_tid_t runq_supervisor_tid;
@@ -1585,7 +1586,7 @@ erts_sched_finish_poke(ErtsSchedulerSleepInfo *ssi,
 	 * to signal on both...
 	 */
 	erts_check_io_interrupt(ssi->psi, 1);
-	/* fall through */
+	ERTS_FALLTHROUGH();
     case ERTS_SSI_FLG_TSE_SLEEPING:
 	erts_tse_set(ssi->event);
 	break;
@@ -2934,6 +2935,7 @@ sched_waiting(Uint no, ErtsRunQueue *rq)
     ERTS_LC_ASSERT(erts_lc_runq_is_locked(rq));
     (void) ERTS_RUNQ_FLGS_SET(rq, (ERTS_RUNQ_FLG_OUT_OF_WORK
 				   | ERTS_RUNQ_FLG_HALFTIME_OUT_OF_WORK));
+    erts_atomic32_inc_nob(&no_waiting_scheds);
     rq->waiting++;
     rq->woken = 0;
     if (!ERTS_RUNQ_IX_IS_DIRTY(rq->ix) && erts_system_profile_flags.scheduler)
@@ -2944,6 +2946,7 @@ static ERTS_INLINE void
 sched_active(Uint no, ErtsRunQueue *rq)
 {
     ERTS_LC_ASSERT(erts_lc_runq_is_locked(rq));
+    erts_atomic32_dec_nob(&no_waiting_scheds);
     rq->waiting--;
     if (!ERTS_RUNQ_IX_IS_DIRTY(rq->ix) && erts_system_profile_flags.scheduler)
 	profile_scheduler(make_small(no), am_active);
@@ -4617,7 +4620,7 @@ no_procs:
 /* Expects rq to be unlocked
    rq is locked on return iff the return value is non-zero */
 static ERTS_INLINE int
-check_possible_steal_victim(ErtsRunQueue *rq, int vix, Process **result_proc, ErtsWStack* contended_runqueues)
+check_possible_steal_victim(ErtsRunQueue *rq, int vix, Process **result_proc, ErtsEQueue* contended_runqueues)
 {
     ErtsRunQueue *vrq = ERTS_RUNQ_IX(vix);
     Uint32 flags = ERTS_RUNQ_FLGS_GET(vrq);
@@ -4625,16 +4628,11 @@ check_possible_steal_victim(ErtsRunQueue *rq, int vix, Process **result_proc, Er
     if (!runq_got_work_to_execute_flags(flags))
         return 0;
 
-    if (contended_runqueues) {
-        if (erts_mtx_trylock(&vrq->mtx) == EBUSY) {
-            WSTACK_PUSH((*contended_runqueues), vix);
-            return 0;
-        }
-        goto lock_taken;
+    if (erts_mtx_trylock(&vrq->mtx) == EBUSY) {
+        EQUEUE_PUT((*contended_runqueues), ((Eterm) vix));
+        return 0;
     }
 
-    erts_mtx_lock(&vrq->mtx);
-lock_taken:
     return try_steal_task_from_victim(rq, vrq, flags, result_proc);
 }
 
@@ -4643,11 +4641,11 @@ try_steal_task(ErtsRunQueue *rq, Process **result_proc)
 {
     int res, vix, active_rqs, blnc_rqs;
     Uint32 flags;
-    DECLARE_WSTACK(contended_runqueues);
+    DECLARE_EQUEUE(contended_runqueues);
 
     flags = empty_runq_get_old_flags(rq);
     if (flags & ERTS_RUNQ_FLG_SUSPENDED)
-	return 0; /* go suspend instead... */
+        return 0; /* go suspend instead... */
 
     ERTS_LC_ASSERT(erts_lc_runq_is_locked(rq));
     erts_runq_unlock(rq);
@@ -4655,62 +4653,63 @@ try_steal_task(ErtsRunQueue *rq, Process **result_proc)
     get_no_runqs(&active_rqs, &blnc_rqs);
 
     if (active_rqs > blnc_rqs)
-	active_rqs = blnc_rqs;
+        active_rqs = blnc_rqs;
 
     if (erts_atomic32_read_acqb(&no_empty_run_queues) >= blnc_rqs)
         goto end_try_steal_task;
 
-    if (rq->ix < active_rqs) {
-	/* First try to steal from an inactive run queue... */
-	if (active_rqs < blnc_rqs) {
-	    int no = blnc_rqs - active_rqs;
-	    int stop_ix = vix = active_rqs + rq->ix % no;
-	    while (1) {
-		res = check_possible_steal_victim(rq, vix, result_proc, &contended_runqueues);
-		if (res) {
-                    DESTROY_WSTACK(contended_runqueues);
-                    return res;
-                }
-		vix++;
-		if (vix >= blnc_rqs)
-		    vix = active_rqs;
-		if (vix == stop_ix)
-		    break;
-	    }
-	}
+    if (rq->ix >= active_rqs)
+        goto end_try_steal_task;
 
-	vix = rq->ix;
-
-	/* ... then try to steal a job from another active queue... */
-	while (1) {
-	    vix++;
-	    if (vix >= active_rqs)
-		vix = 0;
-	    if (vix == rq->ix)
-		break;
-
-	    res = check_possible_steal_victim(rq, vix, result_proc, &contended_runqueues);
-	    if (res) {
-                DESTROY_WSTACK(contended_runqueues);
-                return res;
-            }
-	}
-
-        /* ... and finally re-try stealing from the queues that were skipped because contended.
-           We recheck the number of empty runqueues in each iteration, as taking the runqueue lock in check_possible_steal_victim can take quite a while. */
-        while (!WSTACK_ISEMPTY(contended_runqueues)
-                && (erts_atomic32_read_acqb(&no_empty_run_queues) < blnc_rqs)) {
-            vix = WSTACK_POP(contended_runqueues);
-            res = check_possible_steal_victim(rq, vix, result_proc, NULL);
+    /* First try to steal from an inactive run queue... */
+    if (active_rqs < blnc_rqs) {
+        int no = blnc_rqs - active_rqs;
+        int stop_ix = vix = active_rqs + rq->ix % no;
+        while (1) {
+            res = check_possible_steal_victim(rq, vix, result_proc, &contended_runqueues);
             if (res) {
-                DESTROY_WSTACK(contended_runqueues);
+                DESTROY_EQUEUE(contended_runqueues);
                 return res;
             }
+            vix++;
+            if (vix >= blnc_rqs)
+                vix = active_rqs;
+            if (vix == stop_ix)
+                break;
+        }
+    }
+
+    vix = rq->ix;
+
+    /* ... then try to steal a job from another active queue... */
+    while (1) {
+        vix++;
+        if (vix >= active_rqs)
+            vix = 0;
+        if (vix == rq->ix)
+            break;
+
+        res = check_possible_steal_victim(rq, vix, result_proc, &contended_runqueues);
+        if (res) {
+            DESTROY_EQUEUE(contended_runqueues);
+            return res;
+        }
+    }
+
+    /* ... and finally re-try stealing from the queues that were skipped because contended.
+            We recheck the number of empty runqueues in each iteration, as taking the runqueue lock in check_possible_steal_victim can take quite a while. */
+    while (!EQUEUE_ISEMPTY(contended_runqueues)
+            && (erts_atomic32_read_acqb(&no_empty_run_queues) < blnc_rqs)) {
+        vix = (int) EQUEUE_GET(contended_runqueues);
+        res = check_possible_steal_victim(rq, vix, result_proc, &contended_runqueues);
+        if (res) {
+            DESTROY_EQUEUE(contended_runqueues);
+            return res;
         }
     }
 
 end_try_steal_task:
-    DESTROY_WSTACK(contended_runqueues);
+    DESTROY_EQUEUE(contended_runqueues);
     erts_runq_lock(rq);
     return runq_got_work_to_execute(rq);
 }
@@ -5630,11 +5629,9 @@ wakeup_other_check(ErtsRunQueue *rq, Uint32 flags)
 		    if (rq->waiting) {
 			wake_dirty_scheduler(rq);
 		    }
-		} else
-		{
-		    int empty_rqs =
-			erts_atomic32_read_acqb(&no_empty_run_queues);
-		    if (empty_rqs != 0)
+		}
+                else {
+		    if (erts_atomic32_read_nob(&no_waiting_scheds))
 			wake_scheduler_on_empty_runq(rq);
 		    rq->wakeup_other = 0;
 		}
@@ -6132,6 +6129,7 @@ erts_init_scheduling(int no_schedulers, int no_schedulers_online, int no_poll_th
     erts_atomic32_init_nob(&function_calls, 0);
 #endif
     erts_atomic32_init_nob(&no_empty_run_queues, 0);
+    erts_atomic32_init_nob(&no_waiting_scheds, 0);
 
     erts_no_run_queues = n;
 
@@ -8763,10 +8761,7 @@ sched_thread_func(void *vesdp)
 
     erts_msacc_init_thread("scheduler", no, 1);
 
-    /* In single-threaded mode this lone scheduler is the only managed thread;
-     * register with pref_wakeup so it takes thread-progress id 0 (managed.no==1). */
-    erts_thr_progress_register_managed_thread(esdp, &callbacks,
-                                              erts_single_threaded ? 1 : 0, 0);
+    erts_thr_progress_register_managed_thread(esdp, &callbacks, 0, 0);
 
     if (erts_sched_poll_enabled()) {
         esdp->ssi->psi = erts_create_pollset_thread(-1, NULL);
@@ -8923,7 +8918,7 @@ erts_start_schedulers(void)
 
     opts.name = name;
 
-    if (!erts_single_threaded && erts_runq_supervision_interval) {
+    if (erts_runq_supervision_interval) {
 	opts.suggested_stack_size = 16;
         erts_snprintf(opts.name, sizeof(name), "erts_runq_sup");
 	erts_atomic_init_nob(&runq_supervisor_sleeping, 0);
@@ -8946,8 +8941,6 @@ erts_start_schedulers(void)
     for (ix = 0; ix < erts_no_schedulers; ix++) {
 	ErtsSchedulerData *esdp = ERTS_SCHEDULER_IX(ix);
 	ASSERT(ix == esdp->no - 1);
-	if (erts_single_threaded)
-	    continue; /* main thread runs scheduler 1; see erts_run_scheduler_on_main_thread() */
 	erts_snprintf(opts.name, sizeof(name), "erts_sched_%d", ix + 1);
 	res = ethr_thr_create(&esdp->tid, sched_thread_func, (void*)esdp, &opts);
 	if (res != 0) {
@@ -8979,7 +8972,7 @@ erts_start_schedulers(void)
     }
 
     ix = 0;
-    while (!erts_single_threaded && ix < erts_no_aux_work_threads) {
+    while (ix < erts_no_aux_work_threads) {
 	int id = ix == 0 ? 1 : ix + 1 - (int) erts_no_schedulers;
 	erts_snprintf(opts.name, sizeof(name), "erts_aux_%d", id);
 
@@ -8998,7 +8991,7 @@ erts_start_schedulers(void)
                                            * erts_no_poll_threads);
 
     
-    for (ix = 0; !erts_single_threaded && ix < erts_no_poll_threads; ix++) {
+    for (ix = 0; ix < erts_no_poll_threads; ix++) {
         ErtsBlockPollThreadData *bpt = &block_poll_thread_data[ix].block_data;
         erts_mtx_init(&bpt->mtx, "block_poll_thread",
                       make_small(ix),
@@ -9007,26 +9000,13 @@ erts_start_schedulers(void)
         erts_cnd_init(&bpt->cnd);
         bpt->blocked = 0;
         bpt->id = ix;
-
+        
         erts_snprintf(opts.name, sizeof(name), "erts_poll_%d", ix);
 
         res = ethr_thr_create(&tid, poll_thread, (void*) bpt, &opts);
         if (res != 0)
             erts_exit(ERTS_ABORT_EXIT, "Failed to create poll thread\n");
     }
-}
-
-/*
- * Single-threaded mode: run scheduler 1 directly on the calling (main) thread
- * instead of spawning an OS thread for it. This does the full scheduler-thread
- * setup and then enters process_main(), so it never returns. Called from
- * erl_start() in place of erts_sys_main_thread() when erts_single_threaded.
- */
-void
-erts_run_scheduler_on_main_thread(void)
-{
-    ASSERT(erts_single_threaded);
-    sched_thread_func((void *) ERTS_SCHEDULER_IX(0));
 }
 
 BIF_RETTYPE
@@ -9148,7 +9128,7 @@ erts_internal_suspend_process_2(BIF_ALIST_2)
                  | ERTS_PSFLG_DIRTY_RUNNING_SYS);
 
         rp = erts_try_lock_sig_free_proc(BIF_ARG_1,
-                                         ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS,
+                                         ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS|ERTS_PROC_LOCK_BTM,
                                          &state);
         if (!rp)
             goto noproc;
@@ -9158,11 +9138,12 @@ erts_internal_suspend_process_2(BIF_ALIST_2)
             send_sig = !suspend_process(BIF_P, rp);
             if (!send_sig) {
                 erts_pause_proc_timer(rp);
+                erts_pause_bif_timers(rp, ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS|ERTS_PROC_LOCK_BTM);
                 erts_monitor_list_insert(&ERTS_P_LT_MONITORS(rp), &mdp->u.target);
                 erts_atomic_read_bor_relb(&msp->state,
                                           ERTS_MSUSPEND_STATE_FLG_ACTIVE);
             }
-            erts_proc_unlock(rp, ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS);
+            erts_proc_unlock(rp, ERTS_PROC_LOCK_MAIN|ERTS_PROC_LOCK_STATUS|ERTS_PROC_LOCK_BTM);
         }
         if (send_sig) {
             if (erts_proc_sig_send_monitor(&BIF_P->common, BIF_P->common.id,
@@ -9844,7 +9825,6 @@ Process *erts_schedule(ErtsSchedulerData *esdp, Process *p, int calls)
     continue_check_activities_to_run:
 	flags = ERTS_RUNQ_FLGS_GET_NOB(rq);
     continue_check_activities_to_run_known_flags:
-	ASSERT(!is_normal_sched || (flags & ERTS_RUNQ_FLG_NONEMPTY));
 
 	if (!is_normal_sched) {
 	    if (erts_atomic32_read_acqb(&esdp->ssi->flags)
@@ -9926,7 +9906,6 @@ Process *erts_schedule(ErtsSchedulerData *esdp, Process *p, int calls)
                     p = NULL;
                     if (try_steal_task(rq, &p)) {
                         if (p) {
-                            non_empty_runq(rq);
                             state = erts_atomic32_read_acqb(&p->state);
                             goto execute_process;
                         }
@@ -10724,7 +10703,7 @@ fetch_sys_task(Process *c_p, erts_aint32_t state, int *qmaskp, int *priop)
 	}
 	c_p->sys_task_qs->ncount = 0;
         qbit = LOW_BIT;
-	/* Fall through */
+	ERTS_FALLTHROUGH();
     case LOW_BIT:
 	qp = &c_p->sys_task_qs->q[PRIORITY_LOW];
 	*priop = PRIORITY_LOW;
@@ -11049,7 +11028,7 @@ cleanup_sys_tasks(Process *c_p, erts_aint32_t in_state, int in_reds)
         case ERTS_PSTT_PRIO_SIG:
             state = erts_atomic32_read_nob(&c_p->state);                         
             exit_permanent_prio_elevation(c_p, state, st_prio);
-            /* fall through... */
+            ERTS_FALLTHROUGH();
         case ERTS_PSTT_GC_MAJOR:
         case ERTS_PSTT_GC_MINOR:
 	case ERTS_PSTT_CPC:
@@ -12762,6 +12741,7 @@ erl_create_process(Process* parent, /* Parent of process (default group leader).
     p->sig_inq.may_contain_heap_terms = 0;
 #endif
     p->bif_timers = NULL;
+    p->paused_bif_timers = NULL;
     p->mbuf = NULL;
     p->msg_frag = NULL;
     p->mbuf_sz = 0;
@@ -13290,6 +13270,7 @@ void erts_init_empty_process(Process *p)
     p->sig_inq.may_contain_heap_terms = 0;
 #endif
     p->bif_timers = NULL;
+    p->paused_bif_timers = NULL;
     p->dictionary = NULL;
     p->seq_trace_clock = 0;
     p->seq_trace_lastcnt = 0;
@@ -14317,7 +14298,9 @@ restart:
             if (reds <= 0) goto yield;
             p->bif_timers = NULL;
         }
-
+        if (p->paused_bif_timers) {
+            erts_destroy_paused_bif_timers(p);
+        }
         if (p->flags & F_SCHDLR_ONLN_WAITQ) {
             abort_sched_onln_chng_waitq(p);
             reds -= 100;

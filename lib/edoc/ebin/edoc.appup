@@ -6,7 +6,7 @@
 %% Copyright Ericsson AB 2014-2025. All Rights Reserved.
 %%
 %% %CopyrightEnd%
-{"1.4.1",
+{"1.5",
  [{<<".*">>,[{restart_application, edoc}]}],
  [{<<".*">>,[{restart_application, edoc}]}]
 }.

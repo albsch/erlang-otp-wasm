@@ -4,7 +4,7 @@
 %% SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %%
 %% Copyright 1997-2006 Richard Carlsson
-%% Copyright Ericsson AB 2009-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2009-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,10 +29,6 @@
 %% either the Apache License or the LGPL.
 %%
 %% %CopyrightEnd%
-%%
-%% @author Richard Carlsson <carlsson.richard@gmail.com>
-%% @end
-%% =====================================================================
 
 -module(erl_prettypr).
 -moduledoc """
@@ -42,7 +38,8 @@ This module is a front end to the pretty-printing library module `prettypr`, for
 text formatting of abstract syntax trees defined by the module `erl_syntax`.
 """.
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          nowarn_deprecated_catch]).
 
 -export([format/1, format/2, best/1, best/2, layout/1, layout/2,
 	 get_ctxt_precedence/1, set_ctxt_precedence/2,
@@ -684,6 +681,8 @@ lay_2(Node, Ctxt) ->
             N = case erl_syntax:attribute_name(Node) of
                     {atom, _, 'if'} ->
                         erl_syntax:variable('if');
+                    {atom, A, native_record} ->
+                        {atom, A, record};
                     N0 ->
                         N0
                 end,
@@ -737,7 +736,12 @@ lay_2(Node, Ctxt) ->
                                beside(text("("),
                                       beside(lay(As, Ctxt1),
                                              floating(text(")")))));
-                    _ when Args =:= none ->
+                    native_record ->
+                        [Name, Def] = Args,
+                        D1 = sep(seq([Def], text(","), Ctxt1, fun lay/2)),
+                        beside(text("record #"),
+			       beside(lay(Name, Ctxt1), D1));
+		    _ when Args =:= none ->
 			lay(N, Ctxt1);
                     _ ->
                         D1 = sep(seq(Args, text(","), Ctxt1,
@@ -881,7 +885,12 @@ lay_2(Node, Ctxt) ->
 
 	list_comp ->
 	    Ctxt1 = reset_prec(Ctxt),
-	    D1 = lay(erl_syntax:list_comp_template(Node), Ctxt1),
+            D1 = case erl_syntax:list_comp_template(Node) of
+                List when is_list(List) ->
+                    par(seq(List, floating(text(",")), Ctxt1, fun lay/2));
+                Single ->
+                    lay(Single, Ctxt1)
+            end,
 	    D2 = par(seq(erl_syntax:list_comp_body(Node),
 			 floating(text(",")), Ctxt1,
 			 fun lay/2)),
@@ -901,7 +910,12 @@ lay_2(Node, Ctxt) ->
 
 	map_comp ->
 	    Ctxt1 = set_prec(Ctxt, max_prec()),
-	    D1 = lay(erl_syntax:map_comp_template(Node), Ctxt1),
+            D1 = case erl_syntax:map_comp_template(Node) of
+                List when is_list(List) ->
+                    par(seq(List, floating(text(",")), Ctxt1, fun lay/2));
+                Single ->
+                    lay(Single, Ctxt1)
+            end,
 	    D2 = par(seq(erl_syntax:map_comp_body(Node),
 			 floating(text(",")), Ctxt1,
 			 fun lay/2)),
@@ -964,14 +978,15 @@ lay_2(Node, Ctxt) ->
 		       set_prec(Ctxt, PrecR))),
 	    T = erl_syntax:record_access_type(Node),
 	    D3 = beside(beside(floating(text("#")),
-                               lay(T, reset_prec(Ctxt))),
-                        D2),
+                               lay_native_record_name(T, reset_prec(Ctxt))),
+                               D2),
 	    maybe_parentheses(beside(D1, D3), Prec, Ctxt);
 
 	record_expr ->
 	    {PrecL, Prec, _} = inop_prec('#'),
 	    Ctxt1 = reset_prec(Ctxt),
-	    D1 = lay(erl_syntax:record_expr_type(Node), Ctxt1),
+            D1 = lay_native_record_name(erl_syntax:record_expr_type(Node),
+                                        Ctxt1),
 	    D2 = par(seq(erl_syntax:record_expr_fields(Node),
 			 floating(text(",")), Ctxt1,
 			 fun lay/2)),
@@ -1290,6 +1305,8 @@ attribute_type(Node) ->
             export_type;
         optional_callbacks ->
             optional_callbacks;
+        native_record ->
+            native_record;
         _ ->
             N
     end.
@@ -1486,6 +1503,15 @@ lay_type_application(Name, Arguments, Ctxt) ->
                                  floating(text(")"))))),
     maybe_parentheses(D, Prec, Ctxt).
 
+lay_native_record_name(Node, Ctxt) ->
+    case erl_syntax:type(Node) of
+        list ->
+            [Mod, Name] = erl_syntax:list_elements(Node),
+            beside(lay(Mod, Ctxt), beside(text(":"), lay(Name, Ctxt)));
+        _ ->
+            lay(Node, Ctxt)
+    end.
+
 seq([H | T], Separator, Ctxt, Fun) ->
     case T of
 	[] ->
@@ -1568,7 +1594,7 @@ is_last_and_before_empty_line(H, [], #ctxt{empty_lines = EmptyLines}) ->
     catch error:badarith -> false
     end;
 is_last_and_before_empty_line(H, [H2 | _], #ctxt{empty_lines = EmptyLines}) ->
-    try ((get_line(H2) - get_line(H)) >= 2) and sets:is_element(get_line(H) + 1, EmptyLines)
+    try get_line(H2) - get_line(H) >= 2 andalso sets:is_element(get_line(H) + 1, EmptyLines)
     catch error:badarith -> false
     end.
 

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -31,12 +31,13 @@ commands.
 > These functions are intended for interactive use in the Erlang shell only. The
 > module prefix can be omitted.
 
-## See Also
+### See Also
 
 `m:filename`, `m:compile`, `m:erlang`, `m:yecc`, `m:xref`
 """.
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          nowarn_deprecated_catch]).
 
 -include_lib("kernel/include/eep48.hrl").
 
@@ -47,7 +48,7 @@ commands.
 -export([help/0,lc/1,c/1,c/2,c/3,nc/1,nc/2, nl/1,l/1,i/0,i/1,ni/0,
          y/1, y/2,
 	 lc_batch/0, lc_batch/1,
-	 i/3,pid/3,m/0,m/1,mm/0,lm/0,
+	 pi/1,pi/3,i/3,pid/3,m/0,m/1,mm/0,lm/0,
 	 bt/1, q/0,
      h/1,h/2,h/3,h1/1,h1/2,h1/3,ht/1,ht/2,ht/3,hcb/1,hcb/2,hcb/3,
 	 erlangrc/0,erlangrc/1,bi/1, flush/0, regs/0, uptime/0,
@@ -84,7 +85,7 @@ help() ->
                    "ht(Mod,Type,Arity) -- help about type with arity in module\n"
                    "help()     -- help info\n"
                    "i()        -- information about the system\n"
-                   "i(X,Y,Z)   -- information about pid <X,Y,Z>\n"
+                   "i(X,Y,Z)   -- deprecated alias for pi(X,Y,Z)\n"
                    "l(Module)  -- load or reload module\n"
                    "lc([File]) -- compile a list of Erlang modules\n"
                    "lm()       -- load all modified modules\n"
@@ -99,6 +100,8 @@ help() ->
                    "ni()       -- information about the networked system\n"
                    "nl(Module) -- load module on all nodes\n"
                    "nregs()    -- information about all registered processes\n"
+                   "pi(Pid)    -- information about process <Pid>\n"
+                   "pi(X,Y,Z)  -- information about pid <X,Y,Z>\n"
                    "pid(X,Y,Z) -- convert X,Y,Z to a Pid\n"
                    "pwd()      -- print working directory\n"
                    "q()        -- quit - shorthand for init:stop()\n"
@@ -954,15 +957,36 @@ pid(X, Y, Z) ->
 		integer_to_list(Z) ++ ">").
 
 -doc """
-Displays information about a process, Equivalent to
-[`process_info(pid(X, Y, Z))`](`process_info/1`), but location transparent.
+Old alias for `pi(X, Y, Z)`. Note that the output of `i(X, Y, Z)` is
+very different from that of `i()`, so the new name is preferred.
 """.
 -spec i(X, Y, Z) -> [{atom(), term()}] when
       X :: non_neg_integer(),
       Y :: non_neg_integer(),
       Z :: non_neg_integer().
 
-i(X, Y, Z) -> pinfo(pid(X, Y, Z)).
+i(X, Y, Z) -> pi(X, Y, Z).
+
+-doc """
+Equivalent to `pi(pid(X, Y, Z))`.
+""".
+-doc(#{since => ~"OTP 29.0"}).
+-spec pi(X, Y, Z) -> [{atom(), term()}] when
+      X :: non_neg_integer(),
+      Y :: non_neg_integer(),
+      Z :: non_neg_integer().
+
+pi(X, Y, Z) -> pi(pid(X, Y, Z)).
+
+-doc """
+Displays information about a process, Equivalent to
+[`process_info(Pid)`](`process_info/1`), but location transparent.
+""".
+-doc(#{since => ~"OTP 29.0"}).
+-spec pi(Pid) -> [{atom(), term()}] when
+      Pid :: pid().
+
+pi(Pid) -> pinfo(Pid).
 
 -doc """
 This function is shorthand for `init:stop()`, that is, it causes the node to

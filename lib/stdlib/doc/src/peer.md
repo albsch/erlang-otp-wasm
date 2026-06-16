@@ -3,8 +3,8 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
+%% Copyright Ericsson AB 2022-2026. All Rights Reserved.
 %% Copyright WhatsApp Inc. and its affiliates. All rights reserved.
-%% Copyright Ericsson AB 2022-2025. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -203,7 +203,7 @@ build_image(Dir) ->
       "COPY lambda.tar.gz /tmp\n"
       "RUN tar -zxvf /tmp/lambda.tar.gz -C /opt/lambda\n"
       "ENTRYPOINT [\"/opt/lambda/erts-" ++ erlang:system_info(version) ++
-      "/bin/dyn_erl\", \"-boot\", \"/opt/lambda/releases/1.0.0/start\","
+      "/bin/erl\", \"-boot\", \"/opt/lambda/releases/1.0.0/start\","
       " \"-kernel\", \"inet_dist_listen_min\", \"4445\","
       " \"-erl_epmd_port\", \"4445\","
       " \"-setcookie\", \"secret\"]\n",

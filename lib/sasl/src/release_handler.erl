@@ -211,7 +211,7 @@ release_handler does.
 > If the upgrade or downgrade fails, the application can end up in an
 > inconsistent state.
 
-## See Also
+### See Also
 
 [OTP Design Principles](`e:system:index.html`),
 [`config`](`e:kernel:config.md`), [`rel`](rel.md), [`relup`](relup.md),
@@ -220,6 +220,10 @@ release_handler does.
 -behaviour(gen_server).
 
 -include_lib("kernel/include/file.hrl").
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          {nowarn_possibly_unsafe_function, {file, consult, 1}},
+          {nowarn_possibly_unsafe_function, {file, path_consult, 2}}]).
 
 %% External exports
 -export([start_link/0,
@@ -302,7 +306,7 @@ release_handler does.
 %%       |       |- start_erl (reads start_erl.data)
 %%       |       |_ <to_erl>
 %%       |
-%%       |- erts-EVsn1 --- bin --- <jam44>
+%%       |- erts-EVsn1 --- bin --- <beam.smp>
 %%       |                      |- <epmd>
 %%       |                      |_ erl
 %%       |- erts-EVsn2
@@ -2251,7 +2255,7 @@ try_downgrade(ToVsn, CurrentVsn, Relup, Masters) ->
 
 %% Status = current | tmp_current | permanent
 set_status(Vsn, Status, Releases) ->
-    lists:zf(fun(Release) when Release#release.vsn == Vsn,
+    lists:filtermap(fun(Release) when Release#release.vsn == Vsn,
 		               Release#release.status == permanent ->
 		     %% If a permanent rel is installed, it keeps its
 		     %% permanent status (not changed to current).
@@ -2573,7 +2577,7 @@ write_releases(Dir, Releases, Masters) ->
     %% us after a node restart - since we would then have a permanent
     %% release running, but state set to current for a non-running
     %% release.
-    NewReleases = lists:zf(fun(Release) when Release#release.status == current ->
+    NewReleases = lists:filtermap(fun(Release) when Release#release.status == current ->
 				   {true, Release#release{status = unpacked}};
 			      (_) ->
 				   true

@@ -1,3 +1,4 @@
+#
 # %CopyrightBegin%
 #
 # SPDX-License-Identifier: Apache-2.0
@@ -18,12 +19,7 @@
 #
 # %CopyrightEnd%
 #
-# The Initial Developer of the Original Code is Ericsson Utvecklings AB.
-# Portions created by Ericsson are Copyright 1999, Ericsson Utvecklings
-# AB. All Rights Reserved.''
-# 
-#     $Id$
-#
+
 include $(ERL_TOP)/make/target.mk
 
 include $(ERL_TOP)/make/$(TARGET)/otp.mk
@@ -53,7 +49,7 @@ RELSYSDIR = $(RELEASE_PATH)/lib/kernel-$(KERNEL_VSN)/doc/examples
 # Pack and install the complete directory structure from
 # here (CWD) and down, for all examples.
 
-EXAMPLES  = uds_dist erl_uds_dist gen_tcp_dist
+EXAMPLES  = uds_dist erl_uds_dist gen_tcp_dist socket_sctp
 
 release_spec:
 

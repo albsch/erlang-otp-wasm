@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -249,10 +249,13 @@ The `init` module interprets the following command-line flags:
 error
 ```
 
-## See Also
+### See Also
 
 `m:erl_prim_loader`, `m:heart`
 """.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}}]).
 
 -export([restart/1,restart/0,reboot/0,stop/0,stop/1,
 	 get_status/0,boot/1,get_arguments/0,get_plain_arguments/0,
@@ -1160,7 +1163,7 @@ sleep(T) -> receive after T -> ok end.
 
 start_prim_loader(Init, Path0, {Pa,Pz}) ->
     Path = case Path0 of
-	       false -> Pa ++ ["."|Pz];
+	       false -> Pa ++ Pz ++ ["."];
 	       _ -> Path0
 	   end,
     case erl_prim_loader:start() of
@@ -1330,12 +1333,8 @@ eval_script([{path,Path}|T], #es{path=false,pa=Pa,pz=Pz,
 eval_script([{path,_}|T], #es{}=Es) ->
     %% Ignore, use the command line -path flag.
     eval_script(T, Es);
-eval_script([{kernel_load_completed}|T], #es{load_mode=Mode}=Es0) ->
-    Es = case Mode of
-	     embedded -> Es0;
-	     _ -> Es0#es{prim_load=false}
-	 end,
-    eval_script(T, Es);
+eval_script([{kernel_load_completed}|T], #es{load_mode=Mode}=Es) ->
+    eval_script(T, Es#es{prim_load=(Mode == embedded)});
 eval_script([{primLoad,Mods}|T], #es{init=Init,prim_load=PrimLoad,debug=Deb}=Es)
   when is_list(Mods) ->
     case PrimLoad of
@@ -1843,10 +1842,9 @@ reverse([A, B | L]) ->
 -doc false.
 -spec objfile_extension() -> nonempty_string().
 objfile_extension() ->
-    ".beam".
+    ".beam".  % currently only one possibility
+%%    %% if there are several implementations:
 %%    case erlang:system_info(machine) of
-%%      "JAM" -> ".jam";
-%%      "VEE" -> ".vee";
 %%      "BEAM" -> ".beam"
 %%    end.
 

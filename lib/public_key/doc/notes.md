@@ -21,6 +21,81 @@ limitations under the License.
 -->
 # Public_Key Release Notes
 
+## Public_Key 1.21.2
+
+### Fixed Bugs and Malfunctions
+
+- Add missing macro reference for legacy algorithms md5 and sha224. This mainly improves error handling.
+
+  Own Id: OTP-20172 Aux Id: [PR-11195]
+
+[PR-11195]: https://github.com/erlang/otp/pull/11195
+
+## Public_Key 1.21.1
+
+### Fixed Bugs and Malfunctions
+
+- OCSP responder certificates are now checked for expiration before being accepted as authorized responders. Previously, expired or not-yet-valid responder certificates were incorrectly accepted when verifying OCSP responses.
+
+  Own Id: OTP-20112 Aux Id: [PR-11136]
+
+- Corrected basic constraint path validation check in accordance to RFC 5280.
+
+  Own Id: OTP-20129 Aux Id: [CVE-2026-42789], [PR-11123]
+
+- 'public_key', Adhere to RFC 9525, and remove support for legacy fallback to check hostname against subject common name. Also improve error handling creating two separate errors for name constraint check for subject names and subject alternative names.
+  
+  'ssl'. Error handling is slightly changed to better reflect public_key behaviour.
+
+  *** POTENTIAL INCOMPATIBILITY ***
+
+  Own Id: OTP-20130 Aux Id: [CVE-2026-42790], [PR-11124]
+
+[PR-11136]: https://github.com/erlang/otp/pull/11136
+[CVE-2026-42789]: https://nvd.nist.gov/vuln/detail/2026-42789
+[PR-11123]: https://github.com/erlang/otp/pull/11123
+[CVE-2026-42790]: https://nvd.nist.gov/vuln/detail/2026-42790
+[PR-11124]: https://github.com/erlang/otp/pull/11124
+
+## Public_Key 1.21
+
+### Improvements and New Features
+
+- The legacy `and` and `or` operators have been replaced with other language constructs.
+
+  Own Id: OTP-19744 Aux Id: [PR-10114], [PR-10554], [PR-10568], [PR-10579], [PR-10585], [PR-10598], [PR-10710], [PR-10718], [PR-10580], [PR-10730]
+
+- Added an option for relaxed encoding of certificates to allow some values to be empty. This may be used by 
+  other applications for interoperability reasons. This option is not used by the `ssl` application.
+
+  Own Id: OTP-19822 Aux Id: [PR-10033]
+
+- Added support for `-unsafe` attributes, which is used to mark functions as unsafe to use. 
+  
+  This is similar to but separate from deprecation, and the compiler will by default now generate warnings for calls to functions in Erlang/OTP that are known to be always unsafe.
+  
+  Furthermore, `m:xref` can now be used to find calls to functions in another application that lack a `-doc` attribute (`undocumented_function_calls`), calls to functions in another application marked `-doc false.` (`private_function_calls`), as well as calls to unsafe functions (`unsafe_function_calls`).
+
+  Own Id: OTP-20066 Aux Id: [PR-10839]
+
+- The runtime system now supports generating encrypted crash dumps. See the description of `--enable-encrypted-crash-dumps` in [Building and Installing Erlang/OTP](https://www.erlang.org/doc/system/install.html).
+
+  Own Id: OTP-20085 Aux Id: [PR-10993]
+
+[PR-10114]: https://github.com/erlang/otp/pull/10114
+[PR-10554]: https://github.com/erlang/otp/pull/10554
+[PR-10568]: https://github.com/erlang/otp/pull/10568
+[PR-10579]: https://github.com/erlang/otp/pull/10579
+[PR-10585]: https://github.com/erlang/otp/pull/10585
+[PR-10598]: https://github.com/erlang/otp/pull/10598
+[PR-10710]: https://github.com/erlang/otp/pull/10710
+[PR-10718]: https://github.com/erlang/otp/pull/10718
+[PR-10580]: https://github.com/erlang/otp/pull/10580
+[PR-10730]: https://github.com/erlang/otp/pull/10730
+[PR-10033]: https://github.com/erlang/otp/pull/10033
+[PR-10839]: https://github.com/erlang/otp/pull/10839
+[PR-10993]: https://github.com/erlang/otp/pull/10993
+
 ## Public_Key 1.20.3
 
 ### Fixed Bugs and Malfunctions

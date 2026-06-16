@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -71,8 +71,6 @@ functions are flat, they can be deep lists. Function `lists:flatten/1` can be
 used for flattening deep lists.
 """.
 
--compile(nowarn_deprecated_catch).
-
 -export([fwrite/2,fwrite/3,fread/2,fread/3,format/2,format/3]).
 -export([bfwrite/2, bfwrite/3, bformat/2, bformat/3]).
 -export([scan_format/2,unscan_format/1,build_text/1,build_text/2]).
@@ -109,7 +107,8 @@ used for flattening deep lists.
 -export([write_bin/5, write_string_bin/3, write_binary_bin/4]).
 
 -export_type([chars/0, latin1_string/0, continuation/0,
-              fread_error/0, fread_item/0, format_spec/0, chars_limit/0]).
+              fread_error/0, fread_item/0, format_spec/0,
+              chars_limit/0, format_options/0]).
 
 -dialyzer([{nowarn_function,
             [string_bin_escape_unicode/6,
@@ -195,7 +194,19 @@ Unicode data is allowed.
 fwrite(Format, Args) ->
     format(Format, Args).
 
+-doc """
+A soft limit on the number of characters returned.
+
+When the number of characters is reached, remaining structures are
+replaced by "`...`". `CharsLimit` defaults to -1, which means no limit on the
+number of characters returned.
+""".
 -type chars_limit() :: integer().
+
+-doc """
+Options that can be passed to `format/3` and `fwrite/3`.
+""".
+-type format_options() :: [{'chars_limit', chars_limit()}].
 
 -doc """
 Returns a character list that represents `Data` formatted in accordance with
@@ -213,9 +224,7 @@ Valid option:
 -spec fwrite(Format, Data, Options) -> chars() when
       Format :: io:format(),
       Data :: [term()],
-      Options :: [Option],
-      Option :: {'chars_limit', CharsLimit},
-      CharsLimit :: chars_limit().
+      Options :: format_options().
 
 fwrite(Format, Args, Options) ->
     format(Format, Args, Options).
@@ -239,9 +248,7 @@ bfwrite(F, A) ->
 -spec bfwrite(Format, Data, Options) -> unicode:unicode_binary() when
       Format :: io:format(),
       Data :: [term()],
-      Options :: [Option],
-      Option :: {'chars_limit', CharsLimit},
-      CharsLimit :: chars_limit().
+      Options :: format_options().
 
 bfwrite(F, A, Opts) ->
     bformat(F, A, Opts).
@@ -344,9 +351,7 @@ format(Format, Args) ->
 -spec format(Format, Data, Options) -> chars() when
       Format :: io:format(),
       Data :: [term()],
-      Options :: [Option],
-      Option :: {'chars_limit', CharsLimit},
-      CharsLimit :: chars_limit().
+      Options :: format_options().
 
 format(Format, Args, Options) ->
     try io_lib_format:fwrite(Format, Args, Options)
@@ -376,9 +381,7 @@ bformat(Format, Args) ->
 -spec bformat(Format, Data, Options) -> unicode:unicode_binary() when
       Format :: io:format(),
       Data :: [term()],
-      Options :: [Option],
-      Option :: {'chars_limit', CharsLimit},
-      CharsLimit :: chars_limit().
+      Options :: format_options().
 
 bformat(Format, Args, Options) ->
     try io_lib_format:fwrite_bin(Format, Args, Options)
@@ -408,7 +411,9 @@ formatting to text in, for example, a logger.
       FormatList :: [char() | format_spec()].
 
 scan_format(Format, Args) ->
-    try io_lib_format:scan(Format, Args)
+    try
+        {Scanned, []} = io_lib_format:scan(Format, Args),
+        Scanned
     catch
         C:R:S ->
             test_modules_loaded(C, R, S),
@@ -441,9 +446,7 @@ build_text(FormatList) ->
 -doc false.
 -spec build_text(FormatList, Options) -> chars() when
       FormatList :: [char() | format_spec()],
-      Options :: [Option],
-      Option :: {'chars_limit', CharsLimit},
-      CharsLimit :: chars_limit().
+      Options :: format_options().
 
 build_text(FormatList, Options) ->
     try io_lib_format:build(FormatList, Options)
@@ -522,10 +525,12 @@ format_prompt(Prompt, Encoding) ->
     do_format_prompt(add_modifier(Encoding, "p"), [Prompt]).
 
 do_format_prompt(Format, Args) ->
-    case catch format(Format, Args) of
-	{'EXIT',_} -> "???";
-	List -> List
-    end.
+   try format(Format, Args) of
+       List -> List
+   catch
+       _:_ ->
+           "???"
+   end.
 
 add_modifier(latin1, C) ->
     "~"++C;
@@ -717,7 +722,31 @@ write_bin1(Map, D, Enc, O, Sz, Acc) when is_map(Map), is_integer(D) ->
             {Start,Sz1} = write_map_assoc_bin(K, V, D0, Enc, O, Sz+2, <<Acc/binary, $#, ${>>),
             write_map_body_bin(NextI, D0, D0, Enc, O, Sz1, Start);
         none ->
-            {~"#{}", 3}
+            {<<Acc/binary, "#{}">>, Sz+3}
+    end;
+write_bin1(T, D, Enc, O, Sz, Acc) when is_record(T) ->
+    write_record_bin(T, D, Enc, O, Sz, Acc).
+
+write_record_bin(T, D, Enc, O, Sz0, Acc0) ->
+    {ModStr,ModSz} = write_bin1(records:get_module(T), D, Enc, O, 0, <<>>),
+    {NameStr,NameSz} = write_bin1(records:get_name(T), D, Enc, O, 0, <<>>),
+    Fields = records:get_field_names(T),
+    Acc = <<Acc0/binary, "#", ModStr/binary, ":", NameStr/binary,"{">>,
+    Sz = Sz0 + ModSz + NameSz + 3,
+    write_record_bin1(Fields, T, D, Enc, O, Sz, Acc).
+
+write_record_bin1([], _T, _D, _Enc, _O, Sz0, Acc0) ->
+    {<<Acc0/binary, "}">>, Sz0+1};
+write_record_bin1(_, _T, 1, _Enc, _O, Sz0, Acc0) ->
+    {<<Acc0/binary, "...}">>, Sz0+4};
+write_record_bin1([F|Fs], T, D, Enc, O, Sz0, Acc0) ->
+    {Acc1,Sz1} = write_bin1(F, D, Enc, O, Sz0, Acc0),
+    {Acc2,Sz2} = write_bin1(records:get(F, T), D-1, Enc, O, Sz1 + 3, <<Acc1/binary, " = ">>),
+    case Fs of
+        [] ->
+            {<<Acc2/binary, "}">>, Sz2+1};
+        [_|_] ->
+            write_record_bin1(Fs, T, D-1, Enc, O, Sz2+2, <<Acc2/binary, ",">>)
     end.
 
 write_tail_bin([], _D, _Enc, _O, Sz, Acc) -> {<<Acc/binary, $]>>, Sz+1};
@@ -753,7 +782,7 @@ write_map_assoc_bin(K, V, D, Enc, O, Sz, Acc) ->
 
 write_binary_bin0(B, D, Sz, Acc) ->
     {S, _} = write_binary_bin(B, D, -1, Acc),
-    {S, byte_size(S)+Sz}.
+    {S, byte_size(S) - byte_size(Acc) + Sz}.
 
 -doc false.
 -spec write_binary_bin(Bin, Depth, T, Acc) -> {unicode:unicode_binary(), binary()} when
@@ -810,7 +839,9 @@ write1(T, D, E, O) when is_tuple(T) ->
 	    [${,
 	     [write1(element(1, T), D-1, E, O)|write_tuple(T, 2, D-1, E, O)],
 	     $}]
-    end.
+    end;
+write1(T, D, E, O) when is_record(T) ->
+    write_record(T, D, E, O).
 
 %% write_tail(List, Depth, Encoding)
 %%  Test the terminating case first as this looks better with depth.
@@ -821,6 +852,24 @@ write_tail([H|T], D, E, O) ->
     [$,,write1(H, D-1, E, O)|write_tail(T, D-1, E, O)];
 write_tail(Other, D, E, O) ->
     [$|,write1(Other, D-1, E, O)].
+
+write_record(T, D, E, O) ->
+    [$#, write_atom_for(records:get_module(T), E),
+     $:, write_atom_for(records:get_name(T), E),
+     ${, write_record_1(records:get_field_names(T), T, D, E, O), $}].
+
+write_atom_for(Atom, latin1) -> write_atom_as_latin1(Atom);
+write_atom_for(Atom, _) -> write_atom(Atom).
+
+write_record_1([], _T, _D, _E, _O) ->
+    [];
+write_record_1(_Fs, _T, 1, _E, _O) ->
+    "...";
+write_record_1([F], T, D, E, O) ->
+    [write1(F, D, E, O), " = ", write1(records:get(F, T), D-1, E, O)];
+write_record_1([F|Fs], T, D, E, O) ->
+    [write1(F, D, E, O), " = ", write1(records:get(F, T), D-1, E, O), ","
+    | write_record_1(Fs, T, D-1, E, O)].
 
 write_tuple(T, I, _D, _E, _O) when I > tuple_size(T) -> "";
 write_tuple(_, _I, 1, _E, _O) -> [$, | "..."];

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1999-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1999-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -845,7 +845,7 @@ combined_relops(_Config) ->
     %% Test a sequence that can't occur in optimized code:
     %%   is_ge Fail Src 10
     %%   is_ge Fail Src 5
-    Module = {?FUNCTION_NAME,[{test,1}],[],
+    Module = {?FUNCTION_NAME,[{test,1}],[],#{},
               [{function, test, 1, 2,
                 [{label,1},
                  {line,[{location,"t.erl",4}]},

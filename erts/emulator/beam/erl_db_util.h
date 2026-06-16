@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1998-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1998-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,7 +71,7 @@ typedef struct db_term {
 #ifdef DEBUG_CLONE
     Eterm* debug_clone;    /* An uncompressed copy */
 #endif
-    Eterm tpl[1];          /* Term data. Top tuple always first */
+    Eterm tpl[];           /* Term data. Top tuple always first */
 
     /* Compression: is_immed and key element are uncompressed.
        Compressed elements are stored in external format after each other
@@ -80,6 +80,8 @@ typedef struct db_term {
        The allocated size of the dbterm in bytes is stored at tpl[arity+1].
      */
 } DbTerm;
+
+#define ERTS_SIZEOF_DBTERM(WORDS) (offsetof(DbTerm,tpl) + sizeof(Eterm)*(WORDS))
 
 #define DB_MUST_RESIZE 1
 #define DB_NEW_OBJECT 2
@@ -566,7 +568,8 @@ Binary *db_match_compile(Eterm *matchexpr, Eterm *guards,
 			 Eterm *body, int num_matches, 
 			 Uint flags, 
 			 DMCErrInfo *err_info,
-                         Uint *freasonp);
+                         Uint *freasonp,
+                         const bool *is_prefix);
 /* Returns newly allocated MatchProg binary with refc == 0*/
 
 Eterm db_match_dbterm_uncompressed(DbTableCommon* tb, Process* c_p, Binary* bprog,

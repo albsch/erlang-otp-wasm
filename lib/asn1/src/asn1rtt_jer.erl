@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2012-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2012-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,13 +21,15 @@
 %%
 
 -module(asn1rtt_jer).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_atom, 2}}]).
+
 %% encoding / decoding of BER
 -ifdef(DEBUG).
 -compile(export_all).
 -endif.
 %% For typeinfo JER
 -export([encode_jer/3, decode_jer/3]).
-
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %% Common code for all JER encoding/decoding
@@ -122,7 +124,8 @@ encode_jer({typeinfo,{Module,Type}},Val) ->
 encode_jer({sof,Type},Vals) when is_list(Vals) ->
     [encode_jer(Type,Val)||Val <- Vals];
 encode_jer({choice,Choices},{Alt,Value}) ->
-    case is_map_key(AltBin = atom_to_binary(Alt,utf8),Choices) of
+    AltBin = atom_to_binary(Alt,utf8),
+    case is_map_key(AltBin,Choices) of
         true ->
             EncodedVal = encode_jer(maps:get(AltBin,Choices),Value),
             #{AltBin => EncodedVal};

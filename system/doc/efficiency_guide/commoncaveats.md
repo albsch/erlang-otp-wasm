@@ -49,7 +49,7 @@ naive_reverse([]) ->
 As the `++` operator copies its left-hand side operand, the growing
 result is copied repeatedly, leading to quadratic complexity.
 
-On the other hand, using `++` in loop like this is perfectly fine:
+On the other hand, using `++` in a loop like this is perfectly fine:
 
 **OK**
 
@@ -64,7 +64,7 @@ naive_but_ok_reverse([], Acc) ->
 ```
 
 Each list element is copied only once. The growing result `Acc` is the right-hand
-side operand, which it is _not_ copied.
+side operand, which is _not_ copied.
 
 Experienced Erlang programmers would probably write as follows:
 
@@ -167,14 +167,14 @@ the copied term can be many times larger than the original term. For example:
 ```erlang
 init2() ->
     SharedSubTerms = lists:foldl(fun(_, A) -> [A|A] end, [0], lists:seq(1, 15)),
-    #state{data=Shared}.
+    #state{data=SharedSubTerms}.
 ```
 
 In the process that calls `init2/0`, the size of the `data` field in the `state`
 record will be 32 heap words. When the record is copied to the newly created
 process, sharing will be lost and the size of the copied `data` field will be
 131070 heap words. More details about
-[loss off sharing](eff_guide_processes.md#loss-of-sharing) are found in a later
+[loss of sharing](eff_guide_processes.md#loss-of-sharing) are found in a later
 section.
 
 To avoid the problem, outside of the fun extract only the fields of the record
@@ -203,27 +203,41 @@ fixed_accidental2(State) ->
           end).
 ```
 
-## list_to_atom/1
+## list_to_atom/1, binary_to_atom/1,2
 
 Atoms are not garbage-collected. Once an atom is created, it is never removed.
 The emulator terminates if the limit for the number of atoms (1,048,576 by
 default) is reached.
 
-Therefore, converting arbitrary input strings to atoms can be dangerous in a
+Therefore, converting arbitrary input strings (or binaries) to atoms can be dangerous in a
 system that runs continuously. If only certain well-defined atoms are allowed as
-input, [`list_to_existing_atom/1`](`erlang:list_to_existing_atom/1`) or
-[`binary_to_existing_atom/1`](`erlang:binary_to_existing_atom/1`) can be used
-to guard against a denial-of-service attack. (All atoms that are allowed must
+input, [`list_to_existing_atom/1`](`erlang:list_to_existing_atom/1`),
+[`binary_to_existing_atom/1`](`erlang:binary_to_existing_atom/1`), or
+[`binary_to_existing_atom/2`](`erlang:binary_to_existing_atom/2`) can be used
+to guard against a denial-of-service attack. All atoms that are allowed must
 have been created earlier, for example, by using all of them in a module
-and loading that module.)
+and loading that module.
 
-Using [`list_to_atom/1`](`list_to_atom/1`) to construct an atom that
+Using [`list_to_atom/1`](`list_to_atom/1`), [`binary_to_atom/1`](`binary_to_atom/1`), or
+[`binary_to_atom/2`](`binary_to_atom/2`) to construct an atom that
 is passed to [`apply/3`](`apply/3`) is quite expensive.
 
 **DO NOT**
 
 ```erlang
 apply(list_to_atom("some_prefix"++Var), foo, Args)
+```
+
+**DO NOT**
+
+```erlang
+apply(binary_to_atom(<<"some_prefix", Var/binary>>), foo, Args)
+```
+
+**DO NOT**
+
+```erlang
+apply(binary_to_atom(<<"some_prefix", Var/binary>>, utf8), foo, Args)
 ```
 
 ## length/1

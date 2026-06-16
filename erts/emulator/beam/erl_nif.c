@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2009-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2009-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -905,6 +905,10 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
 
     if (menv) {
         Eterm token = c_p ? SEQ_TRACE_TOKEN(c_p) : am_undefined;
+#ifdef USE_VM_PROBES
+        Eterm utag = NIL;
+#endif
+
         if (token != NIL && token != am_undefined) {
             /* This code is copied from erts_send_message */
             Eterm stoken = SEQ_TRACE_TOKEN(c_p);
@@ -914,7 +918,7 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
             Sint tok_label = 0;
             Sint tok_lastcnt = 0;
             Sint tok_serial = 0;
-            Eterm utag = NIL;
+
             *sender_name = *receiver_name = '\0';
             if (DTRACE_ENABLED(message_send)) {
                 erts_snprintf(sender_name, sizeof(DTRACE_CHARBUF_NAME(sender_name)),
@@ -955,6 +959,9 @@ int enif_send(ErlNifEnv* env, const ErlNifPid* to_pid,
         }
         mp = erts_create_message_from_nif_env(msg_env, 0);
         ERL_MESSAGE_TOKEN(mp) = token;
+#ifdef USE_VM_PROBES
+        ERL_MESSAGE_DT_UTAG(mp) = utag;
+#endif
     } else {
         erts_literal_area_t litarea;
 	ErlOffHeap *ohp;
@@ -1569,6 +1576,11 @@ ErlNifUInt64 enif_hash(ErlNifHash type, Eterm term, ErlNifUInt64 salt)
     }
 }
 
+size_t enif_term_size(Eterm term)
+{
+    return size_object(term) * sizeof(ERL_NIF_TERM);
+}
+
 int enif_get_tuple(ErlNifEnv* env, Eterm tpl, int* arity, const Eterm** array)
 {
     Eterm* ptr;
@@ -1937,6 +1949,21 @@ int enif_get_atom_length(ErlNifEnv* env, Eterm atom, unsigned* len,
         return 1;
     }
     return 0;
+}
+
+int enif_get_atom_cache_index(ErlNifEnv* env, ERL_NIF_TERM atom, unsigned* index)
+{
+    if (is_not_atom(atom) || index == NULL) {
+        return 0;
+    }
+
+    *index = (unsigned) erts_debug_atom_to_out_cache_index(atom);
+    return 1;
+}
+
+unsigned enif_max_atom_cache_index(void)
+{
+    return (unsigned) erts_debug_max_atom_out_cache_index();
 }
 
 int enif_get_list_cell(ErlNifEnv* env, Eterm term, Eterm* head, Eterm* tail)
@@ -3433,24 +3460,10 @@ static_schedule_dirty_nif(ErlNifEnv* env, erts_aint32_t dirty_psflg,
     ASSERT(is_atom(mod) && is_atom(func));
     ASSERT(fp);
 
-    /*
-     * When there are no dirty schedulers of the required kind (single-threaded
-     * wasm build), do not flag the process as dirty -- it would be enqueued on
-     * a dirty run queue that is never serviced. Clearing the flags runs the job
-     * inline on the normal scheduler instead (e.g. prim_file I/O). See the
-     * erts_single_threaded handling in erl_init.c.
-     */
-    {
-        erts_aint32_t set_dirty_flg =
-            ((dirty_psflg == ERTS_PSFLG_DIRTY_CPU_PROC)
-                 ? (erts_no_dirty_cpu_schedulers > 0)
-                 : (erts_no_dirty_io_schedulers > 0))
-            ? dirty_psflg : 0;
-        (void) erts_atomic32_read_bset_nob(&proc->state,
-                                           (ERTS_PSFLG_DIRTY_CPU_PROC
-                                            | ERTS_PSFLG_DIRTY_IO_PROC),
-                                           set_dirty_flg);
-    }
+    (void) erts_atomic32_read_bset_nob(&proc->state,
+					   (ERTS_PSFLG_DIRTY_CPU_PROC
+					    | ERTS_PSFLG_DIRTY_IO_PROC),
+					   dirty_psflg);
 
     return schedule(env, fp, NULL, mod, func, argc, argv);
 }
@@ -3549,18 +3562,12 @@ enif_schedule_nif(ErlNifEnv* env, const char* fun_name, int flags,
 	result = schedule(env, execute_nif, fp, proc->current->module,
 			  fun_name_atom, argc, argv);
     else if (!(flags & ~(ERL_NIF_DIRTY_JOB_IO_BOUND|ERL_NIF_DIRTY_JOB_CPU_BOUND))) {
-        /* No dirty schedulers -> run inline on the normal scheduler (see the
-         * erts_single_threaded handling in erl_init.c). */
-        int cpu_bound = (flags == ERL_NIF_DIRTY_JOB_CPU_BOUND);
-        erts_aint32_t set_dirty_flg =
-            (cpu_bound ? (erts_no_dirty_cpu_schedulers > 0)
-                       : (erts_no_dirty_io_schedulers > 0))
-            ? (cpu_bound ? ERTS_PSFLG_DIRTY_CPU_PROC : ERTS_PSFLG_DIRTY_IO_PROC)
-            : 0;
         (void) erts_atomic32_read_bset_nob(&proc->state,
                                            (ERTS_PSFLG_DIRTY_CPU_PROC
                                             | ERTS_PSFLG_DIRTY_IO_PROC),
-                                           set_dirty_flg);
+                                           (flags == ERL_NIF_DIRTY_JOB_CPU_BOUND
+                                            ? ERTS_PSFLG_DIRTY_CPU_PROC
+                                            : ERTS_PSFLG_DIRTY_IO_PROC));
         result = schedule(env, fp, NULL, proc->current->module, fun_name_atom,
                           argc, argv);
     }

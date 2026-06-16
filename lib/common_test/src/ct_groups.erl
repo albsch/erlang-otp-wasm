@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2004-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2004-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -26,6 +26,8 @@
 
 -module(ct_groups).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([find_groups/4]).
 -export([make_all_conf/3, make_all_conf/4, make_conf/5]).
@@ -60,7 +62,7 @@ find_groups1(Mod, GrNames, TCs, GroupDefs) ->
 	    Path ->
 		{Path,true}
 	end,
-    TCs1 = if (is_atom(TCs) and (TCs /= all)) or is_tuple(TCs) ->
+    TCs1 = if is_atom(TCs), TCs /= all; is_tuple(TCs) ->
 		   [TCs];
 	      true -> 
 		   TCs 

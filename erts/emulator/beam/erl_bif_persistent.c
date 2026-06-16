@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2018-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2018-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -949,8 +949,7 @@ do_info(Process* c_p, TrapData* trap_data)
         if (is_boxed(bucket)) {
             ErtsLiteralArea* area = term_to_area(bucket);
 
-            trap_data->memory += sizeof(ErtsLiteralArea) +
-                                 sizeof(Eterm) * (area->end - area->start - 1);
+            trap_data->memory += ERTS_LITERAL_AREA_SIZE(area);
 
             remaining--;
         }

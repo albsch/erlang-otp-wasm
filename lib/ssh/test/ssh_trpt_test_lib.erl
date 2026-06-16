@@ -27,7 +27,8 @@
 	 instantiate/2,
 	 format_msg/1,
 	 server_host_port/1,
-         return_value/1
+         return_value/1,
+         set_timeout/2
 	]
        ).
 
@@ -344,6 +345,10 @@ send(S0, ssh_msg_kexinit_guess) ->
     S = maybe_reset_alg_neg_and_guess_sent(S0),
     send(S, Msg#ssh_msg_kexinit{first_kex_packet_follows = true});
 
+send(S0, start_incomplete_renegotiation) ->
+    {_Msg, Bytes, Ssh} = ssh_transport:key_exchange_init_msg(S0#s.ssh),
+    send(S0#s{ssh = Ssh}, Bytes);
+
 send(S0, ssh_msg_ignore) ->
     Msg = #ssh_msg_ignore{data = "unexpected_ignore_message"},
     send(S0, Msg);
@@ -484,7 +489,6 @@ recv(S0 = #s{}) ->
 
 			{undefined,_} ->
 			    fail("2 kexint received!!", S);
-					
 			{OwnMsg, _} ->
 			    ReNeg = get_renegotiation_flag(S),
 			    try ssh_transport:handle_kexinit_msg(PeerMsg, OwnMsg, S#s.ssh, ReNeg) of
@@ -496,9 +500,9 @@ recv(S0 = #s{}) ->
 				    S#s{alg_neg = {OwnMsg, PeerMsg},
 					alg = C#ssh.algorithms}
 			    catch
-				Class:Exc ->
-				    save_prints({"Algorithm negotiation failed at line ~p:~p~n~p:~s~nPeer: ~s~n Own: ~s~n",
-						 [?MODULE,?LINE,Class,format_msg(Exc),format_msg(PeerMsg),format_msg(OwnMsg)]},
+				Class:Exc:Stacktrace ->
+				    save_prints({"Algorithm negotiation failed at line ~p:~p~n~p:~s~nPeer: ~s~n Own: ~s~nStacktrace: ~p~n",
+						 [?MODULE,?LINE,Class,format_msg(Exc),format_msg(PeerMsg),format_msg(OwnMsg), Stacktrace]},
 						S#s{alg_neg = {OwnMsg, PeerMsg}})
 			    end
 		    end;
@@ -842,6 +846,9 @@ save_prints({Fmt,Args}, S) ->
 
 return_value(#s{return_value = ReturnValue}) ->
     ReturnValue.
+
+set_timeout(S, Timeout) ->
+    S#s{timeout = Timeout}.
 
 %%% Common part of handling first kex messages that are about to be sent
 handle_first_kex_msg_to_send(MsgType, PeerMsg, OwnMsg, S0) ->

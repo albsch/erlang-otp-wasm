@@ -192,7 +192,7 @@
 %%
 %%
 
-{"4.8.3",
+{"4.9",
  [
   {<<"3\\..*">>, [{restart_application, megaco}]},
   {<<"4\\..*">>, [{restart_application, megaco}]}

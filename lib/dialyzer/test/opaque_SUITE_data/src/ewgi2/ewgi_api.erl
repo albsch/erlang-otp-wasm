@@ -9,16 +9,9 @@
 %% %CopyrightEnd%
 
 %%%
-%%% @doc
-%%% <p>ewgi API. Defines a low level CGI like API.</p>
-%%%
-%%% @end
-%%%
-%%% Created : 10 Oct 2007 by Filippo Pacini <filippo.pacini@gmail.com>
-%%%-------------------------------------------------------------------
 -module(ewgi_api).
 
--include_lib("ewgi.hrl").
+-include("ewgi.hrl").
 
 -export([get_all_headers/1, get_all_data/1]).
 

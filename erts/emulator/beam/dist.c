@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 1996-2025. All Rights Reserved.
+ * Copyright Ericsson AB 1996-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -163,6 +163,8 @@ static char *erts_dop_to_string(enum dop dop) {
         return "UNLINK_ID";
     if (dop == DOP_UNLINK_ID_ACK)
         return "UNLINK_ID_ACK";
+    if (dop == DOP_ALTACT_SIG_SEND)
+        return "DOP_ALTACT_SIG_SEND";
     ASSERT(0);
     return "UNKNOWN";
 }
@@ -2131,7 +2133,7 @@ int erts_net_message(Port *prt,
             }
         }
 
-        /* fall through, the first fragment in the sequence was the last fragment */
+        /* The first fragment in the sequence was also the last fragment */
         ERTS_FALLTHROUGH();
     case ERTS_PREP_DIST_EXT_FRAG_CONT: {
         DistSeqNode *seq;
@@ -2461,8 +2463,7 @@ int erts_net_message(Port *prt,
 	if (tuple_arity != 5) {
 	    goto invalid_message;
 	}
-
-	/* Fall through ... */
+	ERTS_FALLTHROUGH();
     case DOP_REG_SEND:
 	/* {DOP_REG_SEND, From, Cookie, ToName} -- Message */
 	/* {DOP_REG_SEND_TT, From, Cookie, ToName, TraceToken} -- Message */
@@ -3894,11 +3895,10 @@ dist_port_commandv(Port *prt, ErtsDistOutputBuf *obuf)
 #ifdef USE_VM_PROBES
     if (DTRACE_ENABLED(dist_outputv)) {
         DistEntry *dep = (DistEntry*) erts_prtsd_get(prt, ERTS_PRTSD_DIST_ENTRY);
-
-        ERTS_ASSUME(dep);
-
         DTRACE_CHARBUF(port_str, 64);
         DTRACE_CHARBUF(remote_str, 64);
+
+        ERTS_ASSUME(dep);
 
         erts_snprintf(port_str, sizeof(DTRACE_CHARBUF_NAME(port_str)),
                       "%T", prt->common.id);
@@ -4750,11 +4750,10 @@ erts_dist_port_not_busy(Port *prt)
 #ifdef USE_VM_PROBES
     if (DTRACE_ENABLED(dist_port_not_busy)) {
         DistEntry *dep = (DistEntry*) erts_prtsd_get(prt, ERTS_PRTSD_DIST_ENTRY);
-
-        ERTS_ASSUME(dep);
-
         DTRACE_CHARBUF(port_str, 64);
         DTRACE_CHARBUF(remote_str, 64);
+
+        ERTS_ASSUME(dep);
 
         erts_snprintf(port_str, sizeof(DTRACE_CHARBUF_NAME(port_str)),
                       "%T", prt->common.id);
@@ -6091,7 +6090,7 @@ BIF_RETTYPE erts_internal_dist_spawn_request_4(BIF_ALIST_4)
             erts_de_runlock(dep);
             goto notsup;
         }
-        /* Fall through... */
+        ERTS_FALLTHROUGH();
     case ERTS_DSIG_PREP_PENDING: {
         int inserted;
         ErtsMonitorData *mdp;
@@ -6200,9 +6199,9 @@ noconnection:
 notsup:
     error = am_notsup;
     goto send_error;
+
 badopt:
     error = am_badopt;
-    /* fall through... */
 send_error:
     ASSERT(is_value(ok_result));
     if (!(monitor_oflags & ERTS_ML_FLG_SPAWN_NO_EMSG))
@@ -6578,7 +6577,7 @@ monitor_node(Process* p, Eterm Node, Eterm Bool, Eterm Options)
 		erts_de_runlock(dep);
 		goto do_trap;
 	    }
-	    /*fall through*/
+	    ERTS_FALLTHROUGH();
         case ERTS_DSIG_PREP_CONNECTED: {
             ErtsMonitor *mon;
             ErtsMonitorDataExtended *mdep;

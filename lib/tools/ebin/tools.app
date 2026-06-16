@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,9 +21,10 @@
 %%
 {application, tools,
  [{description, "DEVTOOLS  CXC 138 16"},
-  {vsn, "4.1.4"},
+  {vsn, "4.2.1"},
   {modules, [cover,
 	     cprof,
+	     crashdump,
 	     eprof,
 	     fprof,
 	     tprof,
@@ -49,6 +50,7 @@
 			  "kernel-10.0",
                           "erts-15.0",
                           "compiler-8.5",
-                          "erts-15.0"]}
+                          "public_key-1.21",
+                          "crypto-5.9"]}
  ]
 }. 

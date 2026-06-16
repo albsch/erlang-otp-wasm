@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,7 +22,9 @@
 -module(shell).
 -moduledoc({file, "../doc/src/shell.md"}).
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          nowarn_deprecated_catch]).
 
 -export([start/0, start/1, start/2, server/1, server/2, history/1, results/1]).
 -export([get_state/0, get_function/2]).
@@ -865,7 +867,7 @@ report_exception(Class, Severity, {Reason,Stacktrace}, RT) ->
     Tag = severity_tag(Severity),
     I = iolist_size(Tag) + 1,
     PF = fun(Term, I1) -> pp(Term, I1, RT) end,
-    SF = fun(M, _F, _A) -> (M =:= erl_eval) or (M =:= ?MODULE) end,
+    SF = fun(M, _F, _A) -> M =:= erl_eval orelse M =:= ?MODULE end,
     Enc = encoding(),
     Str = erl_error:format_exception(I, Class, Reason, Stacktrace, SF, PF, Enc),
     io:requests([{put_chars, latin1, Tag},
@@ -1027,8 +1029,14 @@ used_records(E, U0, RT, Skip) ->
                     true ->
                         U0;
                     false ->
-                        R = ets:lookup(RT, Name),
-                        used_records(R, [Name | U0], RT, [Name | Skip])
+                        case ets:lookup(RT, {shell_default, Name}) of
+                            [] ->
+                                R = ets:lookup(RT, Name),
+                                used_records(R, [Name | U0], RT, [Name | Skip]);
+                            NR ->
+                                used_records(NR, [{shell_default,Name} | U0],
+                                             RT, [{shell_default,Name}| Skip])
+                        end
                 end,
             used_records(E1, U, RT, Skip);
         {expr,[E1 | Es]} ->
@@ -1043,10 +1051,10 @@ used_records({record,_,Name,Is}) ->
     {name, Name, Is};
 used_records({record_field,_,R,Name,F}) ->
     {name, Name, [R | F]};
+used_records({record_field,_,Name,F}) ->
+    {name, Name, F};
 used_records({record,_,R,Name,Ups}) ->
     {name, Name, [R | Ups]};
-used_records({record_field,_,R,F}) -> % illegal
-    {expr, [R | F]};
 used_records({call,_,{atom,_,record},[A,{atom,_,Name}]}) ->
     {name, Name, A};
 used_records({call,_,{atom,_,is_record},[A,{atom,_,Name}]}) ->
@@ -1218,11 +1226,13 @@ prep_check(E) ->
 expand_records([], E0) ->
     E0;
 expand_records(UsedRecords, E0) ->
-    RecordDefs = [Def || {_Name,Def} <- UsedRecords],
     A = erl_anno:new(1),
     E = prep_rec(E0),
+    RecordDefs = [{attribute,A,module,shell_default}] ++
+                 [Def || {_Name,Def} <- UsedRecords],
     Forms0 = RecordDefs ++ [{function,A,foo,0,[{clause,A,[],[],[E]}]}],
-    Forms = erl_expand_records:module(Forms0, [strict_record_tests]),
+    Forms = erl_expand_records:module(Forms0, [strict_record_tests,
+                                               expand_inits]),
     {function,A,foo,0,[{clause,A,[],[],[NE]}]} = lists:last(Forms),
     prep_rec(NE).
 
@@ -1450,9 +1460,15 @@ local_func(rd, [{string, _, TypeDef}], Bs, _Shell, RT, FT, _Lf, _Ef) ->
     case erl_scan:tokens([], TypeDef, {1,1}, [text,{reserved_word_fun,fun erl_scan:reserved_word/1}]) of
         {done, {ok, Toks, _}, _} ->
             case erl_parse:parse_form(Toks) of
-                {ok,{attribute,_,_,{TypeName,_}}=AttrForm} ->
+                {ok,{attribute,_,record,{TypeName,_}}=AttrForm} ->
                     [_] = add_records([AttrForm], Bs, RT),
                     true = ets:insert(FT, [{{record_def, TypeName}, TypeDef}]),
+                    {value,ok,Bs};
+                {ok,{attribute,_,native_record,{TypeName,_}}=AttrForm} ->
+                    [_] = add_records([AttrForm], Bs, RT),
+                    true = ets:insert(FT, [{{record_def,
+                                             {shell_default, TypeName}},
+                                            TypeDef}]),
                     {value,ok,Bs};
                 {error,{_Location,M,ErrDesc}} ->
                     ErrStr = io_lib:fwrite(<<"~ts">>, [M:format_error(ErrDesc)]),
@@ -1584,6 +1600,7 @@ write_and_compile_module(PathToFile, Output) ->
         ok -> c:c(PathToFile);
         Error -> Error
     end.
+
 non_builtin_local_func(F,As,Bs, FT) ->
     Arity = length(As),
     case erlang:function_exported(user_default, F, Arity) of
@@ -1691,7 +1708,8 @@ read_records(File, Selected, Options) ->
 
 add_records(RAs, Bs0, RT) ->
     %% TODO store File name to support type completion
-    Recs = [{Name,D} || {attribute,_,_,{Name,_}}=D <- RAs],
+    Recs = [{Name,D} || {attribute,_,record,{Name,_}}=D <- RAs]++
+           [{{shell_default,Name},D} || {attribute,_,native_record,{Name,_}}=D <- RAs],
     Bs1 = record_bindings(Recs, Bs0),
     case check_command([], Bs1) of
         {error,{_Location,M,ErrDesc}} ->

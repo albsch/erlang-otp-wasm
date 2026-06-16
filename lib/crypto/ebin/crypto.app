@@ -21,7 +21,7 @@
 %%
 {application, crypto,
    [{description, "CRYPTO"},
-    {vsn, "5.8.3"},
+    {vsn, "5.9"},
     {modules, [crypto,
 	       crypto_ec_curves]},
     {registered, []},

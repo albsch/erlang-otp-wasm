@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 #
-# Copyright Ericsson AB 2004-2025. All Rights Reserved.
+# Copyright Ericsson AB 2004-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -48,11 +48,16 @@ RELSYSDIR = $(RELEASE_PATH)/lib/edoc-$(VSN)
 
 EBIN = ../ebin
 XMERL = ../../xmerl
-ERL_COMPILE_FLAGS += -pa $(XMERL) -I../include -I$(XMERL)/include +warn_unused_vars +warn_unused_import +warn_deprecated_guard +no_docs +nowarn_missing_spec_documented +warn_deprecated_catch -Werror
+ERL_COMPILE_FLAGS += -pa $(XMERL) -I../include -I$(XMERL)/include -I${ERL_TOP}/lib
+ERL_COMPILE_FLAGS += +warn_unused_vars +warn_unused_import +warn_deprecated_guard +no_docs +nowarn_missing_spec_documented +warn_deprecated_catch -Werror
+
+ifeq ($(ERL_DETERMINISTIC),yes)
+	DEP_SKIP_FILES = edoc_parser.erl
+endif
 
 include files.mk
 
-OBJECTS=$(SOURCES:%.erl=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
+OBJECTS=$(ERL_FILES:%.erl=$(EBIN)/%.$(EMULATOR)) $(APP_TARGET) $(APPUP_TARGET)
 
 APP_FILE= edoc.app
 APP_SRC= $(APP_FILE).src
@@ -82,9 +87,6 @@ distclean: clean
 
 realclean: clean
 
-$(EBIN)/%.$(EMULATOR):%.erl
-	$(erlc_verbose)erlc -W $(ERL_COMPILE_FLAGS) -o$(EBIN) $<
-
 # ----------------------------------------------------
 # Special Build Targets
 # ----------------------------------------------------
@@ -104,7 +106,11 @@ release_spec: opt
 	$(INSTALL_DIR) "$(RELSYSDIR)/ebin"
 	$(INSTALL_DATA) $(OBJECTS) "$(RELSYSDIR)/ebin"
 	$(INSTALL_DIR) "$(RELSYSDIR)/src"
-	$(INSTALL_DATA) $(SOURCES) $(HRL_FILES) $(YRL_FILE) "$(RELSYSDIR)/src"
+	$(INSTALL_DATA) $(ERL_FILES) $(HRL_FILES) $(YRL_FILE) "$(RELSYSDIR)/src"
 
 release_docs_spec:
 
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

@@ -31,6 +31,8 @@
 -export([parse/1, parse_and_scan/1, format_error/1]).
 -file("edoc_parser.yrl", 284).
 
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
+
 -export([parse_spec/2, parse_typedef/2, parse_throws/2, parse_ref/2,
 	 parse_see/2, parse_param/2]).
 
@@ -405,7 +407,7 @@ yecctoken2string1(Other) ->
 
 
 
--file("edoc_parser.erl", 408).
+-file("edoc_parser.erl", 410).
 
 -dialyzer({nowarn_function, yeccpars2/7}).
 -compile({nowarn_unused_function,  yeccpars2/7}).
@@ -4009,4 +4011,4 @@ yeccpars2_167_(__Stack0) ->
   end | __Stack].
 
 
--file("edoc_parser.yrl", 469).
+-file("edoc_parser.yrl", 471).

@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 2024-2025. All Rights Reserved.
+# Copyright Ericsson AB 2024-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,6 +31,7 @@
     "system_principles/upgrade.md": [],
     "system_principles/versions.md": [],
     "system_principles/misc.md": [],
+    "vulnerabilities/vulnerabilities.md": [],
     "sbom/sbom.md": [],
     "vulnerabilities/vulnerabilities.md": [],
     "embedded/embedded.md": [],
@@ -53,6 +54,7 @@
     "reference_manual/expressions.md": [],
     "reference_manual/macros.md": [],
     "reference_manual/ref_man_records.md": [],
+    "reference_manual/ref_man_native_records.md": [],
     "reference_manual/errors.md": [],
     "reference_manual/features.md": [],
     "reference_manual/ref_man_processes.md": [],

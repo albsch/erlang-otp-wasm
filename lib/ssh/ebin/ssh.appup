@@ -20,7 +20,7 @@
 %% %CopyrightEnd%
 %%
 
-{"5.5.2",	
+{"6.0.1",	
  [
   {<<"4.3.2">>, [{load_module, ssh_channel, soft_purge, soft_purge, []}
 	       ]},

@@ -112,14 +112,6 @@ extern Uint ERTS_WRITE_UNLIKELY(erts_no_dirty_cpu_schedulers);
 extern Uint ERTS_WRITE_UNLIKELY(erts_no_dirty_io_schedulers);
 extern Uint ERTS_WRITE_UNLIKELY(erts_no_run_queues);
 extern int ERTS_WRITE_UNLIKELY(erts_no_aux_work_threads);
-/*
- * Single-threaded mode: when set, the runtime is forced onto a single OS
- * thread (1 normal scheduler, 0 dirty CPU/IO schedulers, 0 async threads).
- * Used by the wasm build so the emulator can be linked without pthreads and
- * thus without SharedArrayBuffer. Set in erl_start() from __EMSCRIPTEN__ and/or
- * the ERL_SINGLE_THREADED environment variable.
- */
-extern int ERTS_WRITE_UNLIKELY(erts_single_threaded);
 extern int erts_sched_thread_suggested_stack_size;
 extern int erts_dcpu_sched_thread_suggested_stack_size;
 extern int erts_dio_sched_thread_suggested_stack_size;
@@ -294,8 +286,7 @@ typedef enum {
 
 /*
  * Keep ERTS_SSI_AUX_WORK flags ordered in expected frequency
- * order relative each other. Most frequent at lowest at lowest
- * index.
+ * order relative each other. Most frequent at lowest index.
  *
  * ERTS_SSI_AUX_WORK_DEBUG_WAIT_COMPLETED_IX *need* to be
  * highest index...
@@ -1181,6 +1172,8 @@ struct process {
     ErtsSchedulerData *scheduler_data;
     erts_atomic_t run_queue;
 
+    ErtsPausedBifTimers* paused_bif_timers; /* BIF timers paused during suspend */
+
 #ifdef USE_VM_PROBES
     Eterm dt_utag;              /* Place to store the dynamic trace user tag */
     Uint dt_utag_flags;         /* flag field for the dt_utag */
@@ -1208,6 +1201,7 @@ struct process {
 #ifdef DEBUG
     Uint debug_reds_in;
 #endif
+
 };
 
 extern Eterm erts_init_process_id; /* pid of init process */
@@ -1226,19 +1220,6 @@ void erts_check_for_holes(Process* p);
 #else
 # define INIT_HOLE_CHECK(p)
 # define ERTS_HOLE_CHECK(p)
-#endif
-
-/*
- * The MBUF_GC_FACTOR decides how easily a process is subject to GC 
- * due to message buffers allocated outside the heap.
- * The larger the factor, the easier the process gets GCed.
- * On a small memory system with lots of processes, this makes a significant 
- * difference, especially since the GCs help fragmentation quite a bit too.
- */
-#if defined(SMALL_MEMORY)
-#define MBUF_GC_FACTOR 4
-#else
-#define MBUF_GC_FACTOR 1
 #endif
 
 #define SEQ_TRACE_TOKEN(p)  ((p)->seq_trace_token)
@@ -2113,7 +2094,6 @@ erts_block_multi_scheduling(Process *, ErtsProcLocks, int, int, int);
 int erts_is_multi_scheduling_blocked(void);
 Eterm erts_multi_scheduling_blockers(Process *, int);
 void erts_start_schedulers(void);
-void erts_run_scheduler_on_main_thread(void);
 void erts_alloc_notify_delayed_dealloc(int);
 void erts_alloc_ensure_handle_delayed_dealloc_call(int);
 void erts_notify_canceled_timer(ErtsSchedulerData *, int);

@@ -23,7 +23,6 @@
 %%
 
 %%% Description: SSH transport protocol
-
 -module(ssh_transport).
 -moduledoc false.
 
@@ -213,6 +212,7 @@ supported_algorithms() -> [{K,supported_algorithms(K)} || K <- algo_classes()].
 supported_algorithms(kex) ->
     select_crypto_supported(
       [
+       {'mlkem768x25519-sha256',                [{kems, mlkem768}, {public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
        {'curve25519-sha256',                    [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
        {'curve25519-sha256@libssh.org',         [{public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]},
        {'curve448-sha512',                      [{public_keys,ecdh}, {curves,x448},   {hashs,sha512}]},
@@ -225,8 +225,7 @@ supported_algorithms(kex) ->
        {'diffie-hellman-group14-sha256',        [{public_keys,dh},   {hashs,sha256}]}, % In OpenSSH 7.3.p1
        {'diffie-hellman-group14-sha1',          [{public_keys,dh},   {hashs,sha}]},
        {'diffie-hellman-group-exchange-sha1',   [{public_keys,dh},   {hashs,sha}]},
-       {'diffie-hellman-group1-sha1',           [{public_keys,dh},   {hashs,sha}]},
-       {'mlkem768x25519-sha256',                [{kems, mlkem768}, {public_keys,ecdh}, {curves,x25519}, {hashs,sha256}]}
+       {'diffie-hellman-group1-sha1',           [{public_keys,dh},   {hashs,sha}]}
       ]);
 supported_algorithms(public_key) ->
     select_crypto_supported(
@@ -319,7 +318,12 @@ is_valid_mac(_, _ , #ssh{recv_mac_size = 0}) ->
     true;
 is_valid_mac(Mac, Data, #ssh{recv_mac = Algorithm,
 			     recv_mac_key = Key, recv_sequence = SeqNum}) ->
-    ssh_lib:comp(Mac, mac(Algorithm, Key, SeqNum, Data)).
+    try
+        crypto:hash_equals(Mac, mac(Algorithm, Key, SeqNum, Data))
+    catch
+        _:_ ->
+            false
+    end.
 
 handle_hello_version(Version) ->
     try
@@ -1033,8 +1037,8 @@ handle_new_keys(#ssh_msg_newkeys{}, Ssh0) ->
     end. 
 
 %%%----------------------------------------------------------------
-kex_strict_alg(client) -> [?kex_strict_c];
-kex_strict_alg(server) -> [?kex_strict_s].
+kex_strict_alg(client) -> [?kex_strict_c, ?kex_strict_c_pre];
+kex_strict_alg(server) -> [?kex_strict_s, ?kex_strict_s_pre].
 
 %%%----------------------------------------------------------------
 kex_ext_info(Role, Opts) ->
@@ -1237,10 +1241,14 @@ select_algorithm(Role, Client, Server,
                     case Role of
                         server ->
                             lists:member(?kex_strict_c,
-                                         Client#ssh_msg_kexinit.kex_algorithms);
+                                         Client#ssh_msg_kexinit.kex_algorithms) orelse
+                                lists:member(?kex_strict_c_pre,
+                                             Client#ssh_msg_kexinit.kex_algorithms);
                         client ->
                             lists:member(?kex_strict_s,
-                                         Server#ssh_msg_kexinit.kex_algorithms)
+                                         Server#ssh_msg_kexinit.kex_algorithms) orelse
+                                lists:member(?kex_strict_s_pre,
+                                             Server#ssh_msg_kexinit.kex_algorithms)
                     end,
                 case Result of
                     true ->
@@ -1962,11 +1970,13 @@ decrypt(#ssh{decrypt = 'chacha20-poly1305@openssh.com',
             %% The length is decrypted separately in a first step
             PacketLenBin = crypto:crypto_one_time(chacha20, K1, <<0:8/unit:8, Seq:8/unit:8>>, EncryptedLen, false),
             {Ssh, PacketLenBin};
-         {AAD,Ctext,Ctag} ->
+        {AAD,Ctext,Ctag} ->
             %% The length is already decrypted and used to divide the input
             %% Check the mac (important that it is timing-safe):
             PolyKey = crypto:crypto_one_time(chacha20, K2, <<0:8/unit:8,Seq:8/unit:8>>, <<0:32/unit:8>>, false),
-            case ssh_lib:comp(Ctag, crypto:mac(poly1305, PolyKey, <<AAD/binary,Ctext/binary>>)) of
+	    try
+                crypto:hash_equals(Ctag, crypto:mac(poly1305, PolyKey, <<AAD/binary,Ctext/binary>>))
+	    of
                 true ->
                     %% MAC is ok, decode
                     IV2 = <<1:8/little-unit:8, Seq:8/unit:8>>,
@@ -1974,6 +1984,9 @@ decrypt(#ssh{decrypt = 'chacha20-poly1305@openssh.com',
                     {Ssh, PlainText};
                 false ->
                     {Ssh,error}
+            catch
+                _:_ ->
+                    {Ssh, error}
             end
     end;
 decrypt(#ssh{decrypt = none} = Ssh, Data) ->
@@ -2263,8 +2276,7 @@ valid_key_sha_alg(_, _, _) -> false.
 
 
 valid_key_sha_alg_ec(OID, Alg) when is_tuple(OID) ->
-    {SshCurveType, _} = ssh_message:oid2ssh_curvename(OID),
-    Alg == binary_to_atom(SshCurveType);
+    Alg == ssh_message:oid2ssh_curve_algo(OID);
 valid_key_sha_alg_ec(_, _) -> false.
 
     
@@ -2273,9 +2285,8 @@ valid_key_sha_alg_ec(_, _) -> false.
 
 public_algo(#'RSAPublicKey'{}) ->   'ssh-rsa';  % FIXME: Not right with draft-curdle-rsa-sha2
 public_algo({_, #'Dss-Parms'{}}) -> 'ssh-dss';
-public_algo({#'ECPoint'{},{namedCurve,OID}}) when is_tuple(OID) -> 
-    {SshCurveType, _} = ssh_message:oid2ssh_curvename(OID),
-    binary_to_atom(SshCurveType).
+public_algo({#'ECPoint'{},{namedCurve,OID}}) when is_tuple(OID) ->
+    ssh_message:oid2ssh_curve_algo(OID).
 
 
 sha('ssh-rsa') -> sha;

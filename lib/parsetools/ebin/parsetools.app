@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application, parsetools,
  [{description, "XLATETOOLS  CXC 138 xx"},
-  {vsn, "2.7.1"},
+  {vsn, "2.8"},
   {modules, [leex,
              yecc,
 	     yeccparser,

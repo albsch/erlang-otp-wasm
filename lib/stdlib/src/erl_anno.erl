@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -67,7 +67,7 @@ The functions [`anno_from_term()`](`erl_parse:anno_from_term/1`),
 [`new_anno()`](`erl_parse:new_anno/1`), in the `erl_parse` module can be used
 for manipulating annotations in abstract code.
 
-## See Also
+### See Also
 
 `m:erl_parse`, `m:erl_scan`
 """.
@@ -103,7 +103,7 @@ for manipulating annotations in abstract code.
                     | {'generated', generated()}
                     | {'location', location()}
                     | {'end_location', location()}
-                    | {'record', record()}
+                    | {'record', record_local()}
                     | {'text', string()}.
 
 -ifdef(DEBUG).
@@ -123,7 +123,7 @@ or a list of key-value pairs.
 -type filename() :: file:filename_all().
 -nominal line() :: non_neg_integer().
 -nominal location() :: line() | {line(), column()}.
--type record() :: boolean().
+-type record_local() :: boolean().
 -type text() :: string().
 
 -ifdef(DEBUG).
@@ -218,6 +218,10 @@ is_anno1(A) ->
 is_anno2(location, Line) when ?LN(Line) ->
     true;
 is_anno2(location, {Line, Column}) when ?LN(Line), ?COL(Column) ->
+    true;
+is_anno2(end_location, Line) when ?LN(Line) ->
+    true;
+is_anno2(end_location, {Line, Column}) when ?LN(Line), ?COL(Column) ->
     true;
 is_anno2(generated, true) ->
     true;
@@ -346,7 +350,7 @@ location(Anno) ->
     anno_info(Anno, location, 0).
 
 -doc false.
--spec record(Anno) -> record() when
+-spec record(Anno) -> record_local() when
       Anno :: anno().
 
 record(Line) when ?ALINE(Line) ->
@@ -434,7 +438,7 @@ set_end_location(Location, Anno) ->
 -doc "Modifies the record marker of the annotations Anno.".
 -doc(#{since => <<"OTP 18.0">>}).
 -spec set_record(Record, Anno) -> Anno when
-      Record :: record(),
+      Record :: record_local(),
       Anno :: anno().
 
 set_record(Record, Anno) ->

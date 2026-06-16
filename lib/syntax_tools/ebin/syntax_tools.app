@@ -3,13 +3,13 @@
 %
 % SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %
-% Copyright Ericsson AB 2004-2025. All Rights Reserved.
+% Copyright Ericsson AB 2004-2026. All Rights Reserved.
 %
 % %CopyrightEnd%
 
 {application, syntax_tools,
  [{description, "Syntax tools"},
-  {vsn, "4.0.3"},
+  {vsn, "4.1"},
   {modules, [epp_dodger,
 	     erl_comment_scan,
 	     erl_prettypr,
@@ -23,4 +23,4 @@
   {applications, [stdlib]},
   {env, []},
   {runtime_dependencies,
-   ["compiler-9.0","erts-16.0","kernel-10.3","stdlib-7.0"]}]}.
+   ["compiler-9.0","erts-16.0","kernel-10.3","stdlib-8.0"]}]}.

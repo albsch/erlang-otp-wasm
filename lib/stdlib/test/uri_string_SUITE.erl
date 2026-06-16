@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2008-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -58,6 +58,7 @@
          regression_parse/1, regression_recompose/1, regression_normalize/1,
          recompose_host_relative_path/1,
          recompose_host_absolute_path/1,
+         doctests/1,
          quote/1
         ]).
 
@@ -154,6 +155,7 @@ all() ->
      regression_normalize,
      recompose_host_relative_path,
      recompose_host_absolute_path,
+     doctests,
      quote
     ].
 
@@ -1365,6 +1367,14 @@ recompose_host_absolute_path(_Config) ->
         uri_string:recompose(#{host => <<"example.com">>,
                                path => [<<"/f">>,<<"oo">>]}),
     ok.
+
+%%-------------------------------------------------------------------------
+%% Doctest tests
+%%-------------------------------------------------------------------------
+doctests(Config) ->
+    Path = filename:join(proplists:get_value(data_dir, Config),
+    "uri_string_usage.md"),
+    ok = ct_doctest:file(Path).
 
 %%-------------------------------------------------------------------------
 %% Quote tests

@@ -6,8 +6,8 @@
 %%
 %% %CopyrightEnd%
 {application, asn1,
- [{description, "The Erlang ASN1 compiler version 5.4.3"},
-  {vsn, "5.4.3"},
+ [{description, "The Erlang ASN1 compiler version 5.5"},
+  {vsn, "5.5"},
   {modules, [
         asn1rt_nif
              ]},

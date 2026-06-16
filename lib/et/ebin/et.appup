@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"1.7.3",
+{"1.8",
  [{<<".*">>,[{restart_application, et}]}],
  [{<<".*">>,[{restart_application, et}]}]
 }.

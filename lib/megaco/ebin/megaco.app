@@ -22,7 +22,7 @@
 
 {application, megaco,
  [{description, "Megaco/H.248 protocol"},
-  {vsn, "4.8.3"},
+  {vsn, "4.9"},
   {modules,
    [	
 	megaco,

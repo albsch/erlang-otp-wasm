@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2020-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -138,7 +138,7 @@ read_file(Filename) ->
 
 strip_comment(Data) ->
     case re:replace(Data, "^%.*\n", "", [{return, binary}]) of
-        Data -> {ok, Data};
+        Data -> {ok, fixup(Data)};
         NewData -> strip_comment(NewData)
     end.
 
@@ -544,11 +544,11 @@ render_module(Mod, #docs_v1{ docs = Docs } = D) ->
     Files =
         #{
           SMod ++ ".txt" =>
-              unicode:characters_to_binary(shell_docs:render(Mod, D, Opts)),
+              fixup(unicode:characters_to_binary(shell_docs:render(Mod, D, Opts))),
           SMod ++ "_type.txt" =>
-              unicode:characters_to_binary(shell_docs:render_type(Mod, D, Opts)),
+              fixup(unicode:characters_to_binary(shell_docs:render_type(Mod, D, Opts))),
           SMod ++ "_cb.txt" =>
-                    unicode:characters_to_binary(shell_docs:render_callback(Mod, D, Opts))
+                    fixup(unicode:characters_to_binary(shell_docs:render_callback(Mod, D, Opts)))
          },
     lists:foldl(
       fun({_Type,_Anno,_Sig,none,_Meta}, Acc) ->
@@ -556,8 +556,8 @@ render_module(Mod, #docs_v1{ docs = Docs } = D) ->
          ({{function,Name,Arity},_Anno,_Sig,_Doc,_Meta}, Acc) ->
               FAName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_func.txt",
               FName = SMod ++ "_"++atom_to_list(Name)++"_func.txt",
-              FADocs = unicode:characters_to_binary(shell_docs:render(Mod, Name, Arity, D, Opts)),
-              FDocs = unicode:characters_to_binary(shell_docs:render(Mod, Name, D, Opts)),
+              FADocs = fixup(unicode:characters_to_binary(shell_docs:render(Mod, Name, Arity, D, Opts))),
+              FDocs = fixup(unicode:characters_to_binary(shell_docs:render(Mod, Name, D, Opts))),
               case string:equal(FADocs,FDocs) of
                   true -> 
                       Acc#{ sanitize(FAName) => FADocs };
@@ -568,11 +568,11 @@ render_module(Mod, #docs_v1{ docs = Docs } = D) ->
          ({{type,Name,Arity},_Anno,_Sig,_Doc,_Meta}, Acc) ->
               FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_type.txt",
               Acc#{ sanitize(FName) =>
-                        unicode:characters_to_binary(shell_docs:render_type(Mod, Name, Arity, D, Opts))};
+                        fixup(unicode:characters_to_binary(shell_docs:render_type(Mod, Name, Arity, D, Opts)))};
          ({{callback,Name,Arity},_Anno,_Sig,_Doc,_Meta}, Acc) ->
               FName = SMod ++ "_"++atom_to_list(Name)++"_"++integer_to_list(Arity)++"_cb.txt",
               Acc#{ sanitize(FName) =>
-                        unicode:characters_to_binary(shell_docs:render_callback(Mod, Name, Arity, D, Opts))}
+                        fixup(unicode:characters_to_binary(shell_docs:render_callback(Mod, Name, Arity, D, Opts)))}
       end, Files, Docs);
 render_module(Mod, Datadir) ->
     {ok, [Docs]} = file:consult(filename:join(Datadir, atom_to_list(Mod) ++ ".docs_v1")),
@@ -584,6 +584,13 @@ sanitize(FName) ->
               re:replace(Txt,Re,Replace,[global,{return,list}])
       end, FName, [{"/","slash"},{":","colon"},
                    {"\\*","star"},{"<","lt"},{">","gt"},{"=","eq"}]).
+
+fixup(Data) ->
+    Replacements = [{"\\Q\e(B\e[m\\E", "\e[0m"},
+                    {"\e\\[;+", "\e["}],
+    lists:foldl(fun({Replace, With}, D) ->
+        re:replace(D, Replace, With, [{return, binary}, unicode, global])
+    end, Data, Replacements).
 
 ansi(_Config) ->
     {ok, Docs} = code:get_doc(?MODULE),
@@ -640,13 +647,21 @@ columns(_Config) ->
     ok.
 
 doctests(_Config) ->
-    shell_docs:test(
-      shell_docs_test,
-      [
-       {{function, module, 2}, erl_eval:add_binding('Prebound', hello,
-                                                   erl_eval:new_bindings())}
-      ]),
-    ok.
+    ct_doctest:module(shell_docs,
+                      [{skipped_blocks, 0},
+                       {missing_tests,
+                        [{normalize, 1},
+                         {render, 3},
+                         {render, 4},
+                         {render, 5},
+                         {render_callback, 3},
+                         {render_callback, 4},
+                         {render_callback, 5},
+                         {render_type, 3},
+                         {render_type, 4},
+                         {render_type, 5},
+                         {supported_tags, 0},
+                         {validate, 1}]}]).
 
 %%
 %% Parallel map function.

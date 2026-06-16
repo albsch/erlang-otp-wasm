@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2021-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2021-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -916,7 +916,7 @@ socket_setopt_opts([{_Level, _OptKey} = Opt|Opts], Socket, Tag, Value) ->
 %% We need to lookup the domain of the socket,
 %% so we can select which one to use.
 socket_setopt_opts(Opts, Socket, Tag, Value) ->
-    case socket:getopt(Socket, otp, domain) of
+    case socket:getopt(Socket, {otp, domain}) of
         {ok, Domain} ->
             case lists:keysearch(Domain, 1, Opts) of
                 {value, {Domain, Level, OptKey}} ->
@@ -994,7 +994,7 @@ socket_getopt_opts([{_Domain, _} = Opt|_], Socket, Tag) ->
     socket_getopt_opt(Socket, Opt, Tag);
 
 socket_getopt_opts(Opts, Socket, Tag) ->
-    case socket:getopt(Socket, otp, domain) of
+    case socket:getopt(Socket, {otp, domain}) of
         {ok, Domain} ->
             %% ?DBG([{'domain', Domain}]),
             case lists:keysearch(Domain, 1, Opts) of
@@ -1020,6 +1020,8 @@ socket_getopt_opts(Opts, Socket, Tag) ->
 %% socket_getopt_value(pktoptions, {ok, PktOpts0}) when is_list(PktOpts0) ->
 %%     PktOpts = [{Type, Value} || #{type := Type, value := Value} <- PktOpts0],
 %%     {ok, PktOpts};
+socket_getopt_value(tos, {ok, #{native := NativeValue}}) ->
+    {ok, NativeValue};
 socket_getopt_value(_Tag, {ok, _Value} = Ok) -> Ok;
 socket_getopt_value(_Tag, {error, _} = Error) -> Error.
 
@@ -1055,6 +1057,8 @@ opt_categories(Tag) when is_atom(Tag) ->
         %% open_opts is for the 'Opts' argument of the socket:open call
         debug       -> #{socket => [], start    => [], open_opts => []};
         ipv6_v6only -> #{socket => [], pre_bind => []};
+        reuseport   -> #{socket => [], pre_bind => []};
+        reuseport_lb-> #{socket => [], pre_bind => []};
 
         %% Some options may trigger us to choose recvmsg (instead of recvfrom)
         %% Or trigger us to choose recvfrom *if* was previously selected
@@ -1137,6 +1141,8 @@ socket_opt() ->
       %% The second can be seen as a side effect...
       recbuf           => [{socket, rcvbuf}, {otp, rcvbuf}],
       reuseaddr        => {socket, reuseaddr},
+      reuseport        => {socket, reuseport},
+      reuseport_lb     => {socket, reuseport_lb},
       sndbuf           => {socket, sndbuf},
 
       %%
@@ -2225,27 +2231,31 @@ ctrl2ancdata(CTRL) ->
     ctrl2ancdata(CTRL, []).
 
 ctrl2ancdata([], AncData) ->
-   lists:reverse(AncData);
+    lists:reverse(AncData);
 ctrl2ancdata([#{level := ip,
                 type  := TOS,
-                value := Value,
-                data  := _Data}| CTRL],
+                %% This is an atom: lowdelay | thoughput | reliability | mincost
+                value := #{native := NativeValue} = _Value,
+                data  := <<_DataValue:8/integer>> = _Data} = _CTRL| CTRLs],
              AncData) when (TOS =:= tos) orelse (TOS =:= recvtos) ->
-    ctrl2ancdata(CTRL, [{tos, Value}|AncData]);
+    %% 'inet' does not provide any "translation" (unlike 'socket').
+    %% Instead, it returns the data value as is (the 'native' value).
+    %% So we have to do the same, and therefor choose the 'native' value.
+    ctrl2ancdata(CTRLs, [{tos, NativeValue}|AncData]);
 ctrl2ancdata([#{level := ip,
                 type  := TTL,
                 value := Value,
-                data  := _Data}| CTRL],
+                data  := _Data} = _CTRL| CTRLs],
              AncData) when (TTL =:= ttl) orelse (TTL =:= recvttl) ->
-    ctrl2ancdata(CTRL, [{ttl, Value}|AncData]);
+    ctrl2ancdata(CTRLs, [{ttl, Value}|AncData]);
 ctrl2ancdata([#{level := ipv6,
                 type  := tclass,
                 value := TClass,
-                data  := _Data}| CTRL],
+                data  := _Data} = _CTRL| CTRLs],
              AncData) ->
-    ctrl2ancdata(CTRL, [{tclass, TClass}|AncData]);
-ctrl2ancdata([_|CTRL], AncData) ->
-    ctrl2ancdata(CTRL, AncData).
+    ctrl2ancdata(CTRLs, [{tclass, TClass}|AncData]);
+ctrl2ancdata([_CTRL|CTRLs], AncData) ->
+    ctrl2ancdata(CTRLs, AncData).
 
 
 %% -> {ok, NewD} | {{error, Reason}, D}

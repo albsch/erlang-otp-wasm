@@ -4,7 +4,7 @@
 %% SPDX-License-Identifier: Apache-2.0
 %%
 %% Copyright 1999-2002 Richard Carlsson
-%% Copyright Ericsson AB 2010-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2010-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -20,8 +20,7 @@
 %%
 %% %CopyrightEnd%
 %%
-%% @author Richard Carlsson <carlsson.richard@gmail.com>
-%% @doc Core Erlang inliner.
+%% Core Erlang inliner.
 
 %% =====================================================================
 %%
@@ -39,6 +38,8 @@
 
 -module(cerl_inline).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([core_transform/2, transform/1, transform/2]).
 
@@ -72,7 +73,9 @@
 	       type/1, values_es/1, var_name/1,
 	       map_arg/1, map_es/1, update_c_map/3,
 	       update_c_map_pair/4,
-	       map_pair_op/1, map_pair_key/1, map_pair_val/1
+	       map_pair_op/1, map_pair_key/1, map_pair_val/1,
+               record_arg/1, record_id/1, record_es/1, update_c_record/4,
+               record_pair_key/1, record_pair_val/1, update_c_record_pair/3
 	   ]).
 
 -import(lists, [foldl/3, foldr/3, member/2, mapfoldl/3, reverse/1]).
@@ -140,6 +143,8 @@ weight(binary) -> 4;    % Initialisation base cost.
 weight(bitstr) -> 3;    % Coding/decoding a value; like a primop.
 weight(map) -> 4;       % Initialisation base cost.
 weight(map_pair) -> 3;  % Coding/decoding a value; like a primop.
+weight(record) -> 4;    % Initialisation base cost.
+weight(record_pair) -> 4; % Coding/decoding a value; like a primop.
 weight(module) -> 1.    % Like a letrec with a constant body
 
 %% These "reference" structures are used for variables and function
@@ -348,7 +353,9 @@ i(E, Ctxt, Ren, Env, S0) ->
 		map ->
 		    i_map(E, Ctxt, Ren, Env, S);
                 module ->
-                    i_module(E, Ctxt, Ren, Env, S)
+                    i_module(E, Ctxt, Ren, Env, S);
+                record ->
+                    i_record(E, Ctxt, Ren, Env, S)
             end
     end.
 
@@ -1083,7 +1090,7 @@ i_call(E, Ctxt, Ren, Env, S) ->
     %% Check if the name of the called function is static. If so,
     %% discard the size counts performed above, since the values will
     %% not cause any runtime cost.
-    Static =  is_c_atom(M) and is_c_atom(F),
+    Static = is_c_atom(M) andalso is_c_atom(F),
     S3 = case Static of
 	     true ->
 		 revert_size(S, S2);
@@ -1377,6 +1384,19 @@ i_map_pair(E, Ctx, Ren, Env, S0) ->
     S3 = count_size(weight(map_pair), S2),
     {update_c_map_pair(E, Op, Key, Val), S3}.
 
+i_record(E, Ctx, Ren, Env, S0) ->
+    {Arg, S1} = i(record_arg(E), value, Ren, Env, S0),
+    {Es, S2} = mapfoldl(fun (E_i, S_i) ->
+        i_record_pair(E_i, Ctx, Ren, Env, S_i)
+    end, S1, record_es(E)),
+    S3 = count_size(weight(record), S2),
+    {update_c_record(E, Arg, record_id(E), Es), S3}.
+
+i_record_pair(E, _Ctx, Ren, Env, S0) ->
+    Key = record_pair_key(E),
+    {Val, S1} = i(record_pair_val(E), value, Ren, Env, S0),
+    S2 = count_size(weight(record_pair), S1),
+    {update_c_record_pair(E, Key, Val), S2}.
 
 %% This is a simplified version of `i_pattern', for lists of parameter
 %% variables only. It does not modify the state.
@@ -1439,10 +1459,18 @@ i_pattern(E, Ren, Env, Ren0, Env0, S) ->
 	    {update_c_binary(E, Es), S2};
 	map ->
 	    {Es, S1} = mapfoldl(fun (E_i, S_i) ->
-			i_map_pair_pattern(E_i, Ren, Env, Ren0, Env0, S_i)
-		end, S, map_es(E)),
+                                        i_map_pair_pattern(E_i, Ren, Env,
+                                                           Ren0, Env0, S_i)
+                                end, S, map_es(E)),
 	    S2 = count_size(weight(map), S1),
 	    {update_c_map(E, map_arg(E), Es), S2};
+	record ->
+	    {Es, S1} = mapfoldl(fun (E_i, S_i) ->
+                                        i_record_pair_pattern(E_i, Ren, Env,
+                                                              Ren0, Env0, S_i)
+                                end, S, record_es(E)),
+	    S2 = count_size(weight(record), S1),
+	    {update_c_record(E, void(), record_id(E), Es), S2};
 	_ ->
 	    case is_literal(E) of
 		true ->
@@ -1484,6 +1512,12 @@ i_map_pair_pattern(E, Ren, Env, Ren0, Env0, S) ->
     Op = map_pair_op(E), %% should be 'exact' literal
     S3 = count_size(weight(map_pair), S2),
     {update_c_map_pair(E, Op, Key, Val), S3}.
+
+i_record_pair_pattern(E, Ren, Env, Ren0, Env0, S) ->
+    {Key, S1} = i(record_pair_key(E), value, Ren0, Env0, S),
+    {Val, S2} = i_pattern(record_pair_val(E), Ren, Env, Ren0, Env0, S1),
+    S3 = count_size(weight(map_pair), S2),
+    {update_c_record_pair(E, Key, Val), S3}.
 
 
 %% ---------------------------------------------------------------------
@@ -2291,7 +2325,7 @@ equivalent(E1, E2, Env) ->
     end.
 
 equivalent_lists([E1 | Es1], [E2 | Es2], Env) ->
-    equivalent(E1, E2, Env) and equivalent_lists(Es1, Es2, Env);
+    equivalent(E1, E2, Env) andalso equivalent_lists(Es1, Es2, Env);
 equivalent_lists([], [], _) ->
     true;
 equivalent_lists(_, _, _) ->
@@ -2304,7 +2338,7 @@ reduce_bif_call(M, F, As, Env) ->
     reduce_bif_call_1(M, F, length(As), As, Env).
 
 reduce_bif_call_1(erlang, element, 2, [X, Y], _Env) ->
-    case is_c_int(X) and is_c_tuple(Y) of
+    case is_c_int(X) andalso is_c_tuple(Y) of
 	true ->
 	    %% We are free to change the relative evaluation order of
 	    %% the elements, so lifting out a particular element is OK.
@@ -2347,7 +2381,7 @@ reduce_bif_call_1(erlang, list_to_tuple, 1, [X], _Env) ->
 	    false
     end;
 reduce_bif_call_1(erlang, setelement, 3, [X, Y, Z], Env) ->
-    case is_c_int(X) and is_c_tuple(Y) of
+    case is_c_int(X) andalso is_c_tuple(Y) of
 	true ->
 	    %% Here, unless `Z' is a simple expression, we must bind it
 	    %% to a new variable, because in that case, `Z' must be

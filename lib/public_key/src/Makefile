@@ -82,7 +82,7 @@ PUB_KEY_FLAGS =
 # ----------------------------------------------------
 PUB_KEY_ERL_FLAGS += -I $(INCLUDE) -I ../asn1/
 
-ERL_COMPILE_FLAGS += $(PUB_KEY_ERL_FLAGS) \
+ERL_COMPILE_FLAGS += $(PUB_KEY_ERL_FLAGS) +warn_obsolete_bool_op \
 		     $(PUB_KEY_FLAGS) \
                      +'{parse_transform,sys_pre_attributes}' \
                      +'{attribute,insert,app_vsn,$(APP_VSN)}'
@@ -125,3 +125,8 @@ release_spec: opt
 	$(INSTALL_DATA) $(TARGET_FILES) $(APP_TARGET) $(APPUP_TARGET) "$(RELSYSDIR)/ebin"
 
 release_docs_spec:
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

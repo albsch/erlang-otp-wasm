@@ -24,6 +24,7 @@
 -module(supervisor_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
+-include_lib("stdlib/include/assert.hrl").
 
 %% Testserver specific export
 -export([all/0, suite/0,groups/0,init_per_suite/1, end_per_suite/1, 
@@ -49,6 +50,7 @@
 	  sup_stop_infinity/1, sup_stop_timeout/1, sup_stop_timeout_dynamic/1,
 	  sup_stop_brutal_kill/1, sup_stop_brutal_kill_dynamic/1,
           sup_stop_race/1, sup_stop_non_shutdown_exit_dynamic/1, auto_hibernate/1,
+	  sup_stop_manual/1, sup_stop_manual_timeout/1,
 	  child_adm/1, child_adm_simple/1, child_specs/1, child_specs_map/1,
 	  extra_return/1, sup_flags/1]).
 
@@ -141,7 +143,8 @@ groups() ->
      {sup_stop, [],
       [sup_stop_infinity, sup_stop_timeout, sup_stop_timeout_dynamic,
        sup_stop_brutal_kill, sup_stop_brutal_kill_dynamic,
-       sup_stop_race, sup_stop_non_shutdown_exit_dynamic]},
+       sup_stop_race, sup_stop_non_shutdown_exit_dynamic,
+       sup_stop_manual, sup_stop_manual_timeout]},
      {normal_termination, [],
       [external_start_no_progress_log, permanent_normal, transient_normal, temporary_normal]},
      {shutdown_termination, [],
@@ -655,6 +658,72 @@ sup_stop_non_shutdown_exit_dynamic(Config) when is_list(Config) ->
     ).
 
 %%-------------------------------------------------------------------------
+%% Tests that children are shut down when a supervisor is stopped via
+%% supervisor:stop/1
+%% Since supervisors are gen_servers and the basic functionality of the
+%% stop functions is already tested in gen_server_SUITE, we only make
+%% sure that children are terminated correctly when applied to a
+%% supervisor.
+sup_stop_manual(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = start_link({ok, {{one_for_one, 2, 3600}, []}}),
+    Child1 = {child1, {supervisor_1, start_child, []}, 
+	      permanent, brutal_kill, worker, []},
+    Child2 = {child2, {supervisor_1, start_child, []}, 
+	      permanent, 1000, worker, []},
+    Child3 = {child3, {supervisor_1, start_child, []},
+	      permanent, 1000, worker, []},
+    {ok, CPid1} = supervisor:start_child(sup_test, Child1),
+    link(CPid1),
+    {ok, CPid2} = supervisor:start_child(sup_test, Child2),
+    link(CPid2),
+    {ok, CPid3} = supervisor:start_child(sup_test, Child3),
+    link(CPid3),
+
+    CPid3 ! {sleep, 100000},
+
+    supervisor:stop(Pid),
+
+    check_exit_reason(Pid, normal),
+    check_exit_reason(CPid1, killed),
+    check_exit_reason(CPid2, shutdown),
+    check_exit_reason(CPid3, killed).
+
+%%-------------------------------------------------------------------------
+%% Tests that children are shut down when a supervisor is stopped via
+%% supervisor:stop/3, even if the stop call times out.
+%% Since supervisors are gen_servers and the basic functionality of the
+%% stop functions is already tested in gen_server_SUITE, we only make
+%% sure that children are terminated correctly when applied to a
+%% supervisor.
+sup_stop_manual_timeout(Config) when is_list(Config) ->
+    process_flag(trap_exit, true),
+    {ok, Pid} = start_link({ok, {{one_for_one, 2, 3600}, []}}),
+    Child1 = {child1, {supervisor_1, start_child, []}, 
+	      permanent, 5000, worker, []},
+    Child2 = {child2, {supervisor_1, start_child, []},
+	      permanent, 1000, worker, []},
+    {ok, CPid1} = supervisor:start_child(sup_test, Child1),
+    link(CPid1),
+    {ok, CPid2} = supervisor:start_child(sup_test, Child2),
+    link(CPid2),
+
+    CPid1 ! {sleep, 1000},
+
+    try
+	supervisor:stop(Pid, normal, 100)
+    of
+	ok -> ct:fail(expected_timeout)
+    catch
+	exit:timeout ->
+	    ok
+    end,
+
+    check_exit_reason(Pid, normal),
+    check_exit_reason(CPid1, shutdown),
+    check_exit_reason(CPid2, shutdown).
+
+%%-------------------------------------------------------------------------
 %% The start function provided to start a child may return {ok, Pid}
 %% or {ok, Pid, Info}, if it returns the latter check that the
 %% supervisor ignores the Info, and includes it unchanged in return
@@ -764,8 +833,8 @@ child_adm(Config) when is_list(Config) ->
 
     %% Termination
     {error, not_found} = supervisor:terminate_child(sup_test, hej),
-    {'EXIT',{noproc,{gen_server,call, _}}} =
-	(catch supervisor:terminate_child(foo, child1)),
+    ok = ?assertExit({noproc, {gen_server, call, _}},
+                     supervisor:terminate_child(foo, child1)),
     ok = supervisor:terminate_child(sup_test, child1),
     check_exit_reason(CPid, shutdown),
     [{child1,undefined,worker,[]}] = supervisor:which_children(sup_test),
@@ -786,8 +855,8 @@ child_adm(Config) when is_list(Config) ->
     %% Deletion
     {error, running} = supervisor:delete_child(sup_test, child1),
     {error, not_found} = supervisor:delete_child(sup_test, hej),
-    {'EXIT',{noproc,{gen_server,call, _}}} =
-	(catch supervisor:delete_child(foo, child1)),
+    ok = ?assertExit({noproc, {gen_server, call, _}},
+                     supervisor:delete_child(foo, child1)),
     ok = supervisor:terminate_child(sup_test, child1),
     ok = supervisor:delete_child(sup_test, child1),
     {error, not_found} = supervisor:restart_child(sup_test, child1),
@@ -795,8 +864,8 @@ child_adm(Config) when is_list(Config) ->
     [0,0,0,0] = get_child_counts(sup_test),
 
     %% Start
-    {'EXIT',{noproc,{gen_server,call, _}}} =
-	(catch supervisor:start_child(foo, Child)),
+    ok = ?assertExit({noproc, {gen_server, call, _}},
+                     supervisor:start_child(foo, Child)),
     {ok, CPid3} = supervisor:start_child(sup_test, Child),
     [{child1, CPid3, worker, []}] = supervisor:which_children(sup_test),
     [1,1,0,1] = get_child_counts(sup_test),
@@ -806,10 +875,10 @@ child_adm(Config) when is_list(Config) ->
     [{child1, CPid3, worker, []}] = supervisor:which_children(sup_test),
     [1,1,0,1] = get_child_counts(sup_test),
 
-    {'EXIT',{noproc,{gen_server,call,[foo,which_children,infinity]}}}
-	= (catch supervisor:which_children(foo)),
-    {'EXIT',{noproc,{gen_server,call,[foo,count_children,infinity]}}}
-	= (catch supervisor:count_children(foo)),
+    ok = ?assertExit({noproc, {gen_server, call, [foo, which_children, infinity]}},
+                     supervisor:which_children(foo)),
+    ok = ?assertExit({noproc, {gen_server, call, [foo, count_children, infinity]}},
+                     supervisor:count_children(foo)),
     ok.
 %%-------------------------------------------------------------------------
 %% The API functions terminate_child/2, delete_child/2 restart_child/2
@@ -830,8 +899,8 @@ child_adm_simple(Config) when is_list(Config) ->
     [1,0,0,0] = get_child_counts(sup_test),
 
     %% Start
-    {'EXIT',{noproc,{gen_server,call, _}}} =
-	(catch supervisor:start_child(foo, [])),
+    ok = ?assertExit({noproc, {gen_server, call, _}},
+                     supervisor:start_child(foo, [])),
     {ok, CPid1} = supervisor:start_child(sup_test, []),
     [{undefined, CPid1, worker, []}] =
 	supervisor:which_children(sup_test),
@@ -1324,8 +1393,8 @@ temporary_bystander(_Config) ->
     terminate(SupPid1, CPid1, child1, normal),
     terminate(SupPid2, CPid3, child1, normal),
     timer:sleep(350),
-    catch link(SupPid1),
-    catch link(SupPid2),
+    _ = try link(SupPid1) catch _:_ -> ok end,
+    _ = try link(SupPid2) catch _:_ -> ok end,
     %% The supervisor would die attempting to restart child2
     true = erlang:is_process_alive(SupPid1),
     true = erlang:is_process_alive(SupPid2),
@@ -2118,7 +2187,7 @@ dont_save_start_parameters_for_temporary_children(simple_one_for_one = Type) ->
     Size2 = erts_debug:flat_size(sys:get_status(Sup2)),
     Size3 = erts_debug:flat_size(sys:get_status(Sup3)),
 
-    true = (Size3 < Size1)  and  (Size3 < Size2),
+    true = Size3 < Size1 andalso Size3 < Size2,
 
     terminate(Sup1, shutdown),
     terminate(Sup2, shutdown),
@@ -2146,7 +2215,7 @@ dont_save_start_parameters_for_temporary_children(Type) ->
     Size2 = erts_debug:flat_size(sys:get_status(Sup2)),
     Size3 = erts_debug:flat_size(sys:get_status(Sup3)),
 
-    true = (Size3 < Size1)  and  (Size3 < Size2),
+    true = Size3 < Size1 andalso Size3 < Size2,
 
     terminate(Sup1, shutdown),
     terminate(Sup2, shutdown),

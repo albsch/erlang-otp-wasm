@@ -22,7 +22,7 @@
 
 {application, reltool,
  [{description, "Reltool the release management tool"},
-  {vsn, "1.0.3"},
+  {vsn, "1.1"},
   {modules,
    [
     reltool,

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -38,38 +38,54 @@
     connect/1, connect/3,
     listen/2,
     accept/2,
-    send/4, sendto/4, sendto/5, sendmsg/4, sendmsg/5, sendv/3,
+    peeloff/2,
+    send/4, sendto/4, sendto/5, sendmsg/4, sendmsg/5, sendmmsg/4, sendv/3,
     sendfile/4, sendfile/5, sendfile_deferred_close/1,
-    recv/4, recvfrom/4, recvmsg/5,
+    recv/4, recvfrom/4, recvmsg/5, recvmmsg/6,
     close/1, finalize_close/1,
     shutdown/2,
     setopt/3, setopt_native/3,
-    getopt/2, getopt_native/3,
-    sockname/1, peername/1,
+    getopt/2, getopt/3, getopt_native/3,
+    sockname/1, socknames/2, peername/1, peernames/2,
     ioctl/2, ioctl/3, ioctl/4,
     cancel/3
    ]).
 
 -export([enc_sockaddr/1, p_get/1, rest_iov/2]).
 
--nifs([nif_info/0, nif_info/1, nif_supports/0, nif_supports/1, nif_command/1,
-       nif_open/2, nif_open/4, nif_bind/2, nif_connect/1, nif_connect/3,
+-nifs([nif_info/0, nif_info/1,
+       nif_supports/0, nif_supports/1,
+       nif_command/1,
+       nif_open/2, nif_open/4,
+       nif_bind/2, nif_bind/3,
+       nif_connect/1, nif_connect/3,
        nif_listen/2, nif_accept/2,
-       nif_send/4, nif_sendto/5, nif_sendmsg/5, nif_sendv/3,
-       nif_sendfile/5, nif_sendfile/4, nif_sendfile/1, nif_recv/4,
-       nif_recvfrom/4, nif_recvmsg/5, nif_close/1, nif_shutdown/2,
-       nif_setopt/5, nif_getopt/3, nif_getopt/4, nif_sockname/1,
-       nif_peername/1, nif_ioctl/2, nif_ioctl/3, nif_ioctl/4, nif_cancel/3,
-       nif_finalize_close/1]).
+       nif_peeloff/2,
+       nif_send/4, nif_sendto/5, nif_sendmsg/5, nif_sendmmsg/4, nif_sendv/3,
+       nif_sendfile/5, nif_sendfile/4, nif_sendfile/1,
+       nif_recv/4, nif_recvfrom/4, nif_recvmsg/5, nif_recvmmsg/6,
+       nif_close/1, nif_shutdown/2,
+       nif_setopt/5, nif_getopt/3, nif_getopt/5,
+       nif_sockname/1, nif_socknames/2, nif_peername/1, nif_peernames/2,
+       nif_ioctl/2, nif_ioctl/3, nif_ioctl/4,
+       nif_cancel/3, nif_finalize_close/1]).
 
 %% Also in socket
 -define(REGISTRY, socket_registry).
+
+%% -define(DBG(T),
+%%         erlang:display({{self(), ?MODULE, ?LINE, ?FUNCTION_NAME}, T})).
 
 
 %% ===========================================================================
 %%
 %% Defaults
 %%
+
+-define(ESOCK_ON_LOAD_EXTRA_DEFAULTS, #{}).
+%% -define(ESOCK_ON_LOAD_EXTRA_DEFAULTS,
+%% 	#{debug        => true,
+%% 	  socket_debug => true}).
 
 -define(ESOCK_SOCKADDR_IN_DEFAULTS,
         (#{family => inet, port => 0, addr => any})).
@@ -82,6 +98,7 @@
         (#{family => unspec, addr => <<>>})).
 -define(ESOCK_SOCKADDR_NATIVE_DEFAULTS,
         (#{family => 0, addr => <<>>})).
+
 
 %% ===========================================================================
 %%
@@ -115,7 +132,7 @@
 %%
 
 on_load() ->
-    on_load(#{}).
+    on_load(?ESOCK_ON_LOAD_EXTRA_DEFAULTS).
 
 on_load(Extra) when is_map(Extra) ->
     %% This is spawned as a system process to prevent init:restart/0 from
@@ -154,13 +171,14 @@ on_load(Extra) when is_map(Extra) ->
                   Extra_1;
               _ ->
                   Extra_1
-                      #{debug => true,
-                        socket_debug => true,
+                      #{debug          => true,
+                        socket_debug   => true,
                         debug_filename => enc_path(DebugFilename)}
           end,
     %% This will fail if the user has disabled esock support, making all NIFs
     %% fall back to their Erlang implementation which throws `notsup`.
-    _ = erlang:load_nif(atom_to_list(?MODULE), Extra_2),
+    LoadRes = erlang:load_nif(atom_to_list(?MODULE), Extra_2),
+    p_put(load_nif_result, LoadRes),
     init().
 
 init() ->
@@ -236,6 +254,7 @@ options_table(Options, Level, LevelNum, [LevelOpt | LevelOpts]) ->
              {{Level, Opt}, undefined}
      end | options_table(Options, Level, LevelNum, LevelOpts)].
 
+
 %% ===========================================================================
 %% API for 'socket'
 %%
@@ -251,6 +270,7 @@ info(SockRef) ->
         #{} ->
             Info
     end.
+
 
 %% ----------------------------------
 
@@ -478,22 +498,31 @@ bind(SockRef, Addrs, Action) when is_list(Addrs) ->
 
 %% ----------------------------------
 
+connect(SockRef, ConnectRef, SockAddrs) when is_list(SockAddrs) ->
+    try [enc_sockaddr(SA) || SA <- SockAddrs] of
+            ESockAddrs ->
+                do_connect(SockRef, ConnectRef, SockAddrs, ESockAddrs)
+        catch
+            throw : Reason ->
+                {error, Reason}
+        end;
 connect(SockRef, ConnectRef, SockAddr) ->
-    try
-        enc_sockaddr(SockAddr)
-    of
+    try enc_sockaddr(SockAddr) of
         ESockAddr ->
-            case nif_connect(SockRef, ConnectRef, ESockAddr) of
-                {invalid, Reason} ->
-                    case Reason of
-                        sockaddr ->
-                            {error, {invalid, {Reason, SockAddr}}}
-                    end;
-                Result -> Result
-            end
+            do_connect(SockRef, ConnectRef, SockAddr, ESockAddr)
     catch
         throw : Reason ->
             {error, Reason}
+    end.    
+
+do_connect(SockRef, ConnectRef, SockAddr, ESockAddr) ->
+    case nif_connect(SockRef, ConnectRef, ESockAddr) of
+        {invalid, Reason} ->
+            case Reason of
+                sockaddr ->
+                    {error, {invalid, {Reason, SockAddr}}}
+            end;
+        Result -> Result
     end.
 
 connect(SockRef) ->
@@ -508,6 +537,12 @@ listen(SockRef, Backlog) ->
 
 accept(ListenSockRef, AccRef) ->
     nif_accept(ListenSockRef, AccRef).
+
+
+%% ----------------------------------
+
+peeloff(SockRef, AssocId) ->
+    nif_peeloff(SockRef, AssocId).
 
 %% ----------------------------------
 
@@ -774,6 +809,16 @@ sendfile(SockRef, FileRef, Offset, Count, SendRef) ->
 sendfile_deferred_close(SockRef) ->
     nif_sendfile(SockRef).
 
+sendmmsg(SockRef, Msgs, Flags, SendRef) ->
+    try enc_msg_flags(Flags) of
+        EFlags ->
+            %% Encode all messages
+            EMsgs = [enc_msg(Msg) || Msg <- Msgs],
+            nif_sendmmsg(SockRef, EMsgs, EFlags, SendRef)
+    catch throw : Reason ->
+            {error, Reason}
+    end.
+
 %% ----------------------------------
 
 recv(SockRef, Length, Flags, RecvRef) ->
@@ -796,16 +841,34 @@ recvmsg(SockRef, BufSz, CtrlSz, Flags, RecvRef) ->
     try enc_msg_flags(Flags) of
         EFlags ->
             case nif_recvmsg(SockRef, BufSz, CtrlSz, EFlags, RecvRef) of
-		{ok, #{ctrl := []}} = Result ->
-		    Result;
-		{ok, #{ctrl := Cmsgs} = Msg} ->
-		    {ok, Msg#{ctrl := dec_cmsgs(Cmsgs, p_get(protocols))}};
+		{ok, Result} ->
+		    {ok, decode_control_messages(Result)};
 		Result ->
 		    Result
 	    end
     catch throw : Reason ->
             {error, Reason}
     end.
+
+recvmmsg(SockRef, VLen, BufSz, CtrlSz, Flags, RecvRef) ->
+    try enc_msg_flags(Flags) of
+        EFlags ->
+            case nif_recvmmsg(SockRef, VLen, BufSz, CtrlSz, EFlags, RecvRef) of
+                {ok, Msgs} ->
+                    {ok, [ decode_control_messages(Msg) || Msg <- Msgs] };
+                Result ->
+                    Result
+            end
+    catch throw : Reason ->
+            {error, Reason}
+    end.
+
+decode_control_messages(#{ctrl := []} = Result) ->
+    Result;
+decode_control_messages(#{ctrl := Cmsgs} = Msg) ->
+    Msg#{ctrl := dec_cmsgs(Cmsgs, p_get(protocols))};
+decode_control_messages(Result) ->
+    Result.
 
 %% ----------------------------------
 
@@ -872,6 +935,24 @@ getopt(SockRef, Option) ->
             end
     end.
 
+getopt(SockRef, Option, Value) ->
+    case enc_sockopt(Option, Value) of
+        undefined ->
+            {error, {invalid, {socket_option, Option}}};
+        invalid ->
+            {error, {invalid, {socket_option, Option}}};
+        {NumLevel, NumOpt} -> 
+            case nif_getopt(SockRef, NumLevel, NumOpt, value, Value) of
+                {invalid, Reason} ->
+                    case Reason of
+                        socket_option ->
+                            {error, {invalid, {socket_option, Option}}}
+                    end;
+                Result ->
+                    getopt_result(Result, Option)
+            end
+    end.
+
 getopt_result({ok, Val} = Result, Option) ->
     case Option of
         {socket,protocol} ->
@@ -900,7 +981,7 @@ getopt_native(SockRef, Option, ValueSpec) ->
         invalid ->
             {error, {invalid, {socket_option, Option}}};
         {NumLevel,NumOpt} ->
-            case nif_getopt(SockRef, NumLevel, NumOpt, ValueSpec) of
+            case nif_getopt(SockRef, NumLevel, NumOpt, native, ValueSpec) of
                 {invalid, Reason} ->
                     case Reason of
                         value ->
@@ -917,8 +998,14 @@ getopt_native(SockRef, Option, ValueSpec) ->
 sockname(Ref) ->
     nif_sockname(Ref).
 
+socknames(Ref, AssocId) ->
+    nif_socknames(Ref, AssocId).
+
 peername(Ref) ->
     nif_peername(Ref).
+
+peernames(Ref, AssocId) ->
+    nif_peernames(Ref, AssocId).
 
 
 %% ----------------------------------
@@ -1183,12 +1270,12 @@ enc_sockopt({Level,NumOpt}, NativeValue)
                     invalid
             end
     end;
-enc_sockopt({Level,Opt} = Option, _NativeValue)
+enc_sockopt({Level,Opt} = Option, _Value)
   when is_atom(Level), is_atom(Opt) ->
     case p_get(options) of
         #{Option := NumOpt} ->
             NumOpt;
-        #{} ->
+        #{} = _Opts ->
             invalid
     end;
 enc_sockopt(Option, _NativeValue) ->
@@ -1252,9 +1339,12 @@ nif_listen(_SockRef, _Backlog) -> erlang:nif_error(notsup).
 
 nif_accept(_SockRef, _Ref) -> erlang:nif_error(notsup).
 
+nif_peeloff(_SockRef, _AssocId) -> erlang:nif_error(notsup).
+
 nif_send(_SockRef, _Bin, _Flags, _SendRef) -> erlang:nif_error(notsup).
 nif_sendto(_SockRef, _Bin, _Dest, _Flags, _SendRef) -> erlang:nif_error(notsup).
 nif_sendmsg(_SockRef, _Msg, _Flags, _SendRef, _IOV) -> erlang:nif_error(notsup).
+nif_sendmmsg(_SockRef, _Msgs, _Flags, _SendRef) -> erlang:nif_error(notsup).
 nif_sendv(_SockRef, _IOVec, _SendRef) -> erlang:nif_error(notsup).
 
 nif_sendfile(_SockRef, _SendRef, _Offset, _Count, _InFileRef) ->
@@ -1267,6 +1357,8 @@ nif_recv(_SockRef, _Length, _Flags, _RecvRef) -> erlang:nif_error(notsup).
 nif_recvfrom(_SockRef, _Length, _Flags, _RecvRef) -> erlang:nif_error(notsup).
 nif_recvmsg(_SockRef, _BufSz, _CtrlSz, _Flags, _RecvRef) ->
     erlang:nif_error(notsup).
+nif_recvmmsg(_SockRef, _VLen, _BufSz, _CtrlSz, _Flags, _RecvRef) ->
+    erlang:nif_error(notsup).
 
 nif_close(_SockRef) -> erlang:nif_error(notsup).
 nif_finalize_close(_SockRef) -> erlang:nif_error(notsup).
@@ -1274,10 +1366,12 @@ nif_shutdown(_SockRef, _How) -> erlang:nif_error(notsup).
 
 nif_setopt(_SockRef, _Lev, _Opt, _Val, _NativeVal) -> erlang:nif_error(notsup).
 nif_getopt(_SockRef, _Lev, _Opt) -> erlang:nif_error(notsup).
-nif_getopt(_SockRef, _Lev, _Opt, _ValSpec) -> erlang:nif_error(notsup).
+nif_getopt(_SockRef, _Lev, _Opt, _Kind, _Val) -> erlang:nif_error(notsup).
 
 nif_sockname(_SockRef) -> erlang:nif_error(notsup).
+nif_socknames(_SockRef, _AssocId) -> erlang:nif_error(notsup).
 nif_peername(_SockRef) -> erlang:nif_error(notsup).
+nif_peernames(_SockRef, _AssocId) -> erlang:nif_error(notsup).
 
 nif_ioctl(_SockRef, _GReq)               -> erlang:nif_error(notsup).
 nif_ioctl(_SockRef, _GReq, _Arg)         -> erlang:nif_error(notsup).

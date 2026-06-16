@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %% 
-%% Copyright Ericsson AB 2020-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2020-2026. All Rights Reserved.
 %% 
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -46,7 +46,7 @@
 -export([
          sz/1,
          os_cmd/1, os_cmd/2,
-         mq/0, mq/1,
+         mq/1,
          ts/0, ts/1
         ]).
 
@@ -56,13 +56,14 @@
          ensure_not_dog_slow/2,
 
          %% Generic 'has support' test function(s)
+         is_net_supported/0,
          is_socket_supported/0,
          has_support_ipv4/0,
          has_support_ipv6/0,
 	 has_support_unix_domain_socket/0,
 
          which_local_host_info/1, which_local_host_info/2,
-         which_local_addr/1, which_link_local_addr/1,
+         which_local_addr/1, which_local_addrs/2, which_link_local_addr/1,
 
          %% Skipping
          not_yet_implemented/0,
@@ -555,7 +556,7 @@ analyze_and_print_linux_host_info(Version) ->
     %% 'VirtFactor' will be 0 unless virtual
     VirtFactor = linux_virt_factor(),
     Factor =
-        case (catch linux_which_cpuinfo(Distro)) of
+        try linux_which_cpuinfo(Distro) of
             {ok, {CPU, BogoMIPS}} ->
                 io:format("CPU: "
                           "~n   Model:                 ~s"
@@ -608,6 +609,9 @@ analyze_and_print_linux_host_info(Version) ->
                 num_schedulers_to_factor();
             _ ->
                 5
+	catch
+	    _:_ ->
+		5
         end,
     AddLabelFactor = label2factor(Label),
     %% Check if we need to adjust the factor because of the memory
@@ -2128,28 +2132,73 @@ ts_scale_factor() ->
             0
     end.
 
-simplify_label("Systemtap" ++ _) ->
-    {host, systemtap};
-simplify_label("Meamax" ++ _) ->
-    {host, meamax};
-simplify_label("Cover" ++ _) ->
-    {host, cover};
 simplify_label(Label) ->
-    case string:find(string:to_lower(Label), "docker") of
+    simplify_label2(
+      [ string:to_lower(S) || S <- string:tokens(Label, [$ ]) ]).
+
+simplify_label2([]) ->
+    {host, []};
+simplify_label2(LTokens) ->
+    try
+        begin
+            STokens = simplify_label3(LTokens, []),
+            {host, STokens}
+        end
+    catch
+        throw:{?MODULE, What} ->
+            What
+    end.
+
+simplify_label3([], Acc) ->
+    lists:reverse(Acc);
+simplify_label3([LToken|LTokens], Acc) ->
+    case simplify_label4(LToken) of
+        undefined ->
+            simplify_label3(LTokens, Acc);
+        Label ->
+            simplify_label3(LTokens, [Label|Acc])
+    end.
+
+simplify_label4("systemtap" ++ _) ->
+    systemtap;
+simplify_label4("meamax" ++ _) ->
+    meamax;
+simplify_label4("meamin" ++ _) ->
+    meamin;
+simplify_label4("cover" ++ _) ->
+    cover;
+simplify_label4(Label) ->
+    case string:find(Label, "docker") of
         "docker" ++ _ ->
-            docker;
+            throw({?MODULE, docker});
         _ ->
-            {host, undefined}
+            undefined
     end.
 
 label2factor(docker) ->
     4;
-label2factor({host, meamax}) ->
-    2;
-label2factor({host, cover}) ->
-    6;
-label2factor({host, _}) ->
-    0.
+label2factor({host, Labels}) when is_list(Labels) ->
+    %% We analyze them in "prio" order...
+    try
+        begin
+            label2factor(cover,  4, Labels),
+            label2factor(meamax, 2, Labels),
+            label2factor(meamin, 2, Labels),
+            0
+        end
+    catch
+        throw:{?MODULE, Factor} when is_integer(Factor) andalso (Factor > 0) ->
+            Factor
+    end.
+
+label2factor(Label, Factor, Labels) ->
+    case lists:member(Label, Labels) of
+        true ->
+            throw({?MODULE, Factor});
+        false ->
+            ignore
+    end.
+
 
 linux_info_lookup(Key, File) ->
     LKey = string:to_lower(Key),
@@ -2325,6 +2374,13 @@ os_cond_skip_check(OsName, OsNames) ->
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
+mq(Pid) when is_pid(Pid) ->
+    {messages, MQ} = process_info(Pid, messages),
+    MQ.
+
+             
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
 lookup(Key, Config, Default) ->
     case lists:keysearch(Key, 1, Config) of
         {value, {Key, Val}} ->
@@ -2435,7 +2491,7 @@ tc_try(Case, TCCond, Pre, TC, Post)
                             TCRes = TC(State),
                             ?SLEEP(?SECS(1)),
                             tc_print("test case done: try post"),
-                            (catch Post(State)),
+                            ?CATCH_AND_IGNORE( Post(State) ),
                             tc_end("ok"),
                             TCRes
                         end
@@ -2443,7 +2499,7 @@ tc_try(Case, TCCond, Pre, TC, Post)
                         C:{skip, _} = SKIP when (C =:= throw) orelse
                                                 (C =:= exit) ->
                             tc_print("test case (~w) skip: try post", [C]),
-                            (catch Post(State)),
+                            ?CATCH_AND_IGNORE( Post(State) ),
                             tc_end( f("skipping(catched,~w,tc)", [C]) ),
                             SKIP;
                         C:E:S ->
@@ -2455,7 +2511,7 @@ tc_try(Case, TCCond, Pre, TC, Post)
                             case kernel_test_global_sys_monitor:events() of
                                 [] ->
                                     tc_print("test case failed: try post"),
-                                    (catch Post(State)),
+                                    ?CATCH_AND_IGNORE( Post(State) ),
                                     tc_end( f("failed(caught,~w,tc)", [C]) ),
                                     erlang:raise(C, E, S);
                                 SysEvs ->
@@ -2467,7 +2523,7 @@ tc_try(Case, TCCond, Pre, TC, Post)
                                       "~n   E: ~p"
                                       "~n   S: ~p",
                                       [SysEvs, C, E, S]),
-                                    (catch Post(State)),
+                                    ?CATCH_AND_IGNORE( Post(State) ),
                                     tc_end( f("skipping(catched-sysevs,~w,tc)",
                                               [C]) ),
                                     SKIP = {skip,
@@ -2581,11 +2637,12 @@ stop_node(Node) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 timetrap_scale_factor() ->
-    case (catch test_server:timetrap_scale_factor()) of
-        {'EXIT', _} ->
-            1;
+    try test_server:timetrap_scale_factor() of
         N ->
             N
+    catch
+	_:_ ->
+	    1
     end.
 
 
@@ -2608,16 +2665,6 @@ os_cmd(Cmd, Timeout) when is_integer(Timeout) andalso (Timeout > 0) ->
     proxy_call(fun() -> {ok, os:cmd(Cmd)} end, Timeout, {error, timeout}).
 
 
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-
-mq() ->
-    mq(self()).
-
-mq(Pid) when is_pid(Pid) ->
-    {messages, MQ} = process_info(Pid, messages),
-    MQ.
-
-             
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 socket_type(Config) ->
@@ -2679,18 +2726,35 @@ is_socket_backend(Config) when is_list(Config) ->
 %% ESOCK_TTEST_CONDITION
 
 ttest_condition() ->
-    case application:get_all_env(kernel) of
-        Env when is_list(Env) ->
-            case lists:keyfind(esock_ttest_condition, 1, Env) of
-                {_, infinity = Factor} ->
-                    Factor;
-                {_, Factor} when is_integer(Factor) andalso (Factor > 0) ->
-                    Factor;
+    case os:getenv("ESOCK_TTEST_CONDITION") of
+        false ->
+            case application:get_all_env(kernel) of
+                Env when is_list(Env) ->
+                    case lists:keyfind(esock_ttest_condition, 1, Env) of
+                        {_, infinity = Factor} ->
+                            Factor;
+                        {_, Factor} when is_integer(Factor) andalso
+                                         (Factor > 0) ->
+                            Factor;
+                        _X ->
+                            undefined
+                    end;
                 _ ->
                     undefined
             end;
-        _ ->
-            undefined
+        "infinity" ->
+            infinity;
+        MaybeIntStr ->
+            try list_to_integer(MaybeIntStr) of
+                Factor when is_integer(Factor) andalso
+                            (Factor > 0) ->
+                    Factor;
+                _ ->
+                    undefined
+            catch
+                _:_:_ ->
+                    undefined
+            end
     end.
     
 
@@ -2789,10 +2853,25 @@ has_support_ipv6() ->
             skip("IPv6 Not Supported")
     end.
 
+is_net_supported() ->
+    try net:info() of
+        #{load_nif_result := ok} ->
+            true;
+	_ ->
+	    false
+    catch
+        error : notsup ->
+            false;
+        error : undef ->
+            false
+    end.
+
 is_socket_supported() ->
     try socket:info() of
-        #{} ->
-            true
+        #{load_nif_result := ok} ->
+            true;
+	_ ->
+	    false
     catch
         error : notsup ->
             false;
@@ -2813,6 +2892,23 @@ which_local_addr(Domain) ->
         {ok, [#{addr := Addr}|_]} ->
             %% put(debug, false),
             {ok, Addr};
+        {error, _Reason} = ERROR ->
+            ERROR
+    end.
+
+which_local_addrs(Domain, NumAddrs)
+  when (is_integer(NumAddrs) andalso (NumAddrs > 0)) orelse
+       (NumAddrs =:= any) ->
+    %% put(debug, true),
+    case which_local_host_info(false, Domain) of
+	{ok, Addrs} = OK when is_list(Addrs) andalso (NumAddrs =:= any) ->
+	    OK;
+        {ok, Addrs} when (length(Addrs) >= NumAddrs) ->
+            %% put(debug, false),
+            Addrs2 = [Addr || #{addr := Addr} <- Addrs] ,
+            {ok, lists:sublist(Addrs2, NumAddrs)};
+        {ok, Addrs} ->
+            {error, {too_few_addrs, NumAddrs, length(Addrs)}};
         {error, _Reason} = ERROR ->
             ERROR
     end.
@@ -2967,7 +3063,8 @@ net_getifaddrs(LinkLocal, Domain) ->
                           "~n   Addr:   ~p"
                           "~nwhen"
                           "~n   Domain: ~p",
-                          [_Name, Flags, Family, Addr, Domain]),
+                          [?FUNCTION_NAME,
+                           _Name, Flags, Family, Addr, Domain]),
                      lists:member(up, Flags) andalso
                          lists:member(running, Flags) andalso
                          (not lists:member(loopback, Flags)) andalso
@@ -2982,23 +3079,34 @@ accept_address(LinkLocal, {A, B, _, _} = _Addr)
   when (A =:= 169) andalso (B =:= 254) ->
     %% This *is* a link local address:
     %% Will be accepted only if we *are* looking for a link local address
+    ?DBG("~w -> link local address when LinkLocal: ~p",
+         [?FUNCTION_NAME, LinkLocal]),
     LinkLocal;
 accept_address(LinkLocal, {A, _, _, _, _, _, _, _} = _Addr)
   when (A =:= 16#fe80) ->
     %% This *is* a link local address:
     %% Will be accepted only if we *are* looking for a link local address
+    ?DBG("~w -> link local address when LinkLocal: ~p",
+         [?FUNCTION_NAME, LinkLocal]),
     LinkLocal;
 accept_address(LinkLocal, Addr)
   when is_tuple(Addr) andalso (tuple_size(Addr) =:= 4) ->
     %% This is *not* a link local address:
     %% Will be accepted only if we are *not* looking for a link local address
+    ?DBG("~w -> non link local address when LinkLocal: ~p",
+         [?FUNCTION_NAME, LinkLocal]),
     not LinkLocal;
 accept_address(LinkLocal, Addr)
   when is_tuple(Addr) andalso (tuple_size(Addr) =:= 8) ->
     %% This is *not* a link local address:
     %% Will be accepted only if we are *not* looking for a link local address
+    ?DBG("~w -> non link local address when LinkLocal: ~p",
+         [?FUNCTION_NAME, LinkLocal]),
     not LinkLocal;
 accept_address(_LinkLocal, _Addr) ->
+    ?DBG("~w -> not accepted when: "
+         "~n   Addr:      ~p"
+         "~n   LinkLocal: ~p", [?FUNCTION_NAME, _Addr, _LinkLocal]),
     false.
 
 

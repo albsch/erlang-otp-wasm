@@ -28,8 +28,9 @@ SSH File Transfer Protocol (SFTP) client and server.
 
 The `ssh` application is an implementation of the SSH protocol in Erlang. `ssh`
 offers API functions to write customized SSH clients and servers as well as
-making the Erlang shell available over SSH. An SFTP client, `ssh_sftp`, and
-server, `ssh_sftpd`, are also included.
+making the Erlang shell available over SSH. An SFTP client (`ssh_sftp`) and
+server (`ssh_sftpd`) are also included. The SFTP server can be enabled via
+the `subsystems` daemon option.
 
 ## Dependencies
 
@@ -140,6 +141,7 @@ Supported algorithms are (in the default order):
 
 **Key exchange algorithms**
 
+- mlkem768x25519-sha256
 - curve25519-sha256
 - curve25519-sha256@libssh.org
 - curve448-sha512
@@ -234,7 +236,7 @@ cipher aes256-gcm@openssh.com is negotiated.
   - none
   - zlib@openssh.com
 
-The following compression algorithm is disabled by default:
+The following compression algorithm is deprecated in SSH and disabled by default:
 
 - (zlib)
 
@@ -393,6 +395,11 @@ The following RFCs are supported:
 - [Secure Shell (SSH) Key Exchange Method Using Curve25519 and Curve448](https://tools.ietf.org/html/rfc8731)
 - [RFC 8709](https://tools.ietf.org/html/rfc8709) Ed25519 and Ed448 public key
   algorithms for the Secure Shell (SSH) protocol
+- [draft-kampanakis-curdle-ssh-pq-ke](https://datatracker.ietf.org/doc/draft-kampanakis-curdle-ssh-pq-ke/),
+  Post-Quantum Traditional Hybrid Key Exchange for SSH.
+
+  Comment: Implements mlkem768x25519-sha256. The ML-KEM-768 component is
+  defined by [NIST FIPS 203](https://csrc.nist.gov/pubs/fips/203/final).
 
 ## See Also
 

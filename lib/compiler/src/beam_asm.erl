@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -29,13 +29,20 @@
 
 -export_type([fail/0,label/0,src/0,module_code/0,function_name/0]).
 
--import(lists, [append/1,duplicate/2,keymember/3,last/1,map/2,
-                member/2,splitwith/2]).
+-import(lists, [append/1,duplicate/2,keymember/3,last/1,
+                map/2,member/2,splitwith/2]).
 
 -include("beam_opcodes.hrl").
 -include("beam_asm.hrl").
 
--define(BEAM_DEBUG_INFO_VERSION, 0).
+-define(BEAM_DEBUG_INFO_VERSION, 1).
+-define(BEAM_DEBUG_INFO_ENTRY_FRAME_SIZE, 0).
+-define(BEAM_DEBUG_INFO_ENTRY_VAR_MAPPINGS, 1).
+-define(BEAM_DEBUG_INFO_ENTRY_CALLS, 2).
+
+-define(MAX_ARGUMENTS, 255).
+
+-define(BEAM_RECORD_VERSION, 0).
 
 %% Common types for describing operands for BEAM instructions.
 -type src() :: beam_reg() |
@@ -58,8 +65,10 @@
 -type asm_function() ::
         {'function',function_name(),arity(),label(),[asm_instruction()]}.
 
+-type beam_anno() :: #{'native_record' => tuple()}.
+
 -type module_code() ::
-        {module(),[_],[_],[asm_function()],pos_integer()}.
+        {module(),[_],[_],beam_anno(),[asm_function()],pos_integer()}.
 
 %% Flags for the line table.
 -define(BEAMFILE_EXECUTABLE_LINE, 1).
@@ -70,7 +79,7 @@
           {'ok',binary()}.
 
 module(Code0, ExtraChunks, CompileInfo, CompilerOpts) ->
-    {Mod,Exp0,Attr0,Asm0,NumLabels} = Code0,
+    {Mod,Exp0,Attr0,Anno,Asm0,NumLabels} = Code0,
     {1,Dict0} = beam_dict:atom(Mod, beam_dict:new()),
     {0,Dict1} = beam_dict:fname(atom_to_list(Mod) ++ ".erl", Dict0),
     {0,Dict2} = beam_dict:type(any, Dict1),
@@ -80,14 +89,14 @@ module(Code0, ExtraChunks, CompileInfo, CompilerOpts) ->
     {Asm,Attr} = on_load(Asm0, Attr0),
     Exp = sets:from_list(Exp0),
     {Code,Dict} = assemble(Asm, Exp, Dict3, []),
-    Beam = build_file(Code, Attr, Dict, NumLabels, NumFuncs,
+    Beam = build_file(Code, Attr, Anno, Dict, NumLabels, NumFuncs,
                       ExtraChunks, CompileInfo, CompilerOpts),
     {ok,Beam}.
 
 reject_unsupported_versions(Dict) ->
     %% Emit an instruction that was added in our lowest supported
     %% version so that it cannot be loaded by earlier releases.
-    Instr = beam_opcodes:opcode(bs_create_bin, 6),  %OTP 25
+    Instr = beam_opcodes:opcode(update_record, 5),  %OTP 26
     beam_dict:opcode(Instr, Dict).
 
 on_load(Fs0, Attr0) ->
@@ -131,7 +140,7 @@ assemble_function([H|T], Acc, Dict0) ->
 assemble_function([], Code, Dict) ->
     {Code, Dict}.
 
-build_file(Code, Attr, Dict0, NumLabels, NumFuncs, ExtraChunks0,
+build_file(Code, Attr, Anno, Dict0, NumLabels, NumFuncs, ExtraChunks0,
            CompileInfo, CompilerOpts) ->
     %% Create the code chunk.
 
@@ -143,10 +152,14 @@ build_file(Code, Attr, Dict0, NumLabels, NumFuncs, ExtraChunks0,
 		       NumFuncs:32>>,
 		      Code),
 
-    %% Build the BEAM debug information chunk. It is important
-    %% to build it early, because it will add entries to the
-    %% atom and literal tables.
-    {ExtraChunks1,Dict} = build_beam_debug_info(ExtraChunks0, CompilerOpts, Dict0),
+    %% First build the chunks that update the atom and/or
+    %% literal tables.
+
+    %% Build the BEAM debug information chunk.
+    {BDIChunk,Dict1} = build_beam_debug_info(CompilerOpts, Dict0),
+
+    %% Build the native-record record definition chunk.
+    {RecordChunk,Dict} = build_record_chunk(Anno, Dict1),
 
     %% Create the atom table chunk.
     AtomChunk = build_atom_table(CompilerOpts, Dict),
@@ -198,19 +211,20 @@ build_file(Code, Attr, Dict0, NumLabels, NumFuncs, ExtraChunks0,
                       TypeTab),
 
     %% Create the meta chunk
-    Meta = proplists:get_value(<<"Meta">>, ExtraChunks1, empty),
+    Meta = proplists:get_value(<<"Meta">>, ExtraChunks0, empty),
     MetaChunk = case Meta of
                     empty -> [];
                     Meta -> chunk(<<"Meta">>, Meta)
                 end,
 
     %% Remove Meta chunk from ExtraChunks since it is essential
-    ExtraChunks = ExtraChunks1 -- [{<<"Meta">>, Meta}],
+    ExtraChunks = ExtraChunks0 -- [{<<"Meta">>, Meta}],
 
     %% Create the attributes and compile info chunks.
 
     Essentials0 = [AtomChunk,CodeChunk,StringChunk,ImportChunk,
-		   ExpChunk,LambdaChunk,LiteralChunk,MetaChunk],
+                   ExpChunk,LambdaChunk,LiteralChunk,MetaChunk,
+                   RecordChunk|BDIChunk],
     Essentials1 = [iolist_to_binary(C) || C <- Essentials0],
     MD5 = module_md5(Essentials1),
     Essentials = finalize_fun_table(Essentials1, MD5),
@@ -398,33 +412,38 @@ filter_essentials([]) -> [].
 %%% Build the BEAM debug information chunk.
 %%%
 
-build_beam_debug_info(ExtraChunks, CompilerOpts, Dict) ->
+build_beam_debug_info(CompilerOpts, Dict) ->
     case member(beam_debug_info, CompilerOpts) of
         true ->
-            build_beam_debug_info_1(ExtraChunks, Dict);
+            build_beam_debug_info_1(Dict);
         false ->
-            {ExtraChunks,Dict}
+            {[],Dict}
     end.
 
-build_beam_debug_info_1(ExtraChunks0, Dict0) ->
+build_beam_debug_info_1(Dict0) ->
     DebugTab0 = beam_dict:debug_table(Dict0),
     DebugTab1 = [{Index,Info} ||
                     Index := Info <- maps:iterator(DebugTab0, ordered)],
-    DebugTab = build_bdi_fill_holes(DebugTab1),
-    NumVars = lists:sum([length(Vs) || {_,Vs} <- DebugTab]),
-    {Contents0,Dict} = build_bdi(DebugTab, Dict0),
-    NumItems = length(Contents0),
+    DebugTab2 = case DebugTab1 of
+                    [{1,_}|_] -> DebugTab1;
+                    [_|_] -> [{1,#{frame_size => none, vars => []}}|DebugTab1];
+                    [] -> []
+                end,
+    DebugTab = build_bdi_fill_holes(DebugTab2),
+    NumItems = length(DebugTab),
+    BdiInstrs = [Instr || Item <- DebugTab, Instr <- build_bdi_instrs(Item), Instr /= none],
+    NumTerms = lists:sum([length(Ts) || {_call,_,{list, Ts}} <- BdiInstrs]),
+    {Contents0, Dict} = lists:mapfoldl(fun make_op/2, Dict0, BdiInstrs),
     Contents1 = iolist_to_binary(Contents0),
 
     0 = NumItems bsr 31,                        %Assertion.
-    0 = NumVars bsr 31,                         %Assertion.
+    0 = NumTerms bsr 31,                         %Assertion.
 
     Contents = <<?BEAM_DEBUG_INFO_VERSION:32,
                  NumItems:32,
-                 NumVars:32,
+                 NumTerms:32,
                  Contents1/binary>>,
-    ExtraChunks = [{~"DbgB",Contents}|ExtraChunks0],
-    {ExtraChunks,Dict}.
+    {[chunk(~"DbgB", Contents)],Dict}.
 
 build_bdi_fill_holes([]) ->
     [];
@@ -435,39 +454,57 @@ build_bdi_fill_holes([{I0,Item}|[{I1,_}|_]=T]) ->
         I1 ->
             [Item|build_bdi_fill_holes(T)];
         Next ->
-            NewPair = {Next,{none,[]}},
+            NewPair = {Next,#{frame_size => none, vars => []}},
             [Item|build_bdi_fill_holes([NewPair|T])]
     end.
 
-build_bdi([{FrameSize0,Vars0}|Items], Dict0) ->
+build_bdi_instrs(#{frame_size:=FrameSize0, vars:=Vars0}=Info) ->
     %% The debug information utilizes the encoding machinery for BEAM
-    %% instructions. The debug information for `debug_line`
-    %% instructions is translated to:
+    %% instructions. Each entry in the the debug information for
+    %% `debug_line` instructions (frame size, var mappings, etc) is
+    %% translated to:
     %%
-    %%    {call,FrameSize,{list,[VariableName,Where,...]}}
-    %%
-    %% Where:
-    %%
-    %%    FrameSize := 'none' | 0..1023
-    %%    VariableName := binary()
-    %%    Where := {x,0..1023} | {y,0..1023} | {literal,_} |
-    %%             {integer,_} | {atom,_} | {float,_} | nil
+    %%    {call,EntryCode,EntryEncoding}
     %%
     %% The only reason the `call` instruction is used is because it
     %% has two operands.
+    %%
+    %% The only mandatory entry is "frame size", as it will be used
+    %% as an item delimiter when loading.
+    %%
+    %% Encodings (which must be sent in this order):
+    %%
+    %% * ENTRY_FRAME_SIZE:  'none' | 'entry' | 0..1023
+    %% * ENTRY_VAR_MAPPINGS:  {list,[VarName,VarLoc,...]}}
+    %% * ENTRY_CALLS: {list, [VarNameOrArity, VarNameOrAtom?, VarNameOrAtom?,....]
+    %%
+    %% Where:
+    %%
+    %%    VarName := binary()
+    %%    VarLoc := {x,0..1023} | {y,0..1023} | {literal,_} |
+    %%              {integer,_} | {atom,_} | {float,_} | nil
+    %%    VarNameOrArity := binary() | 0..511 (arity >= 256 denotes local call)
+    %%    VarNameOrAtom := binary() | {atom,_}
     %%
     %% The debug information in the following example:
     %%
     %%    {debug_line,[...],1,1,
     %%       {4, [{'Args',[{y,3}]},
     %%            {'Line',[{y,2}]},
-    %%            {'Live',[{x,0},{y,1}]}]}}
+    %%            {'Live',[{x,0},{y,1}]}]},
+    %%           [{remote,'M',handle_call,3},
+    %%            {local,f,2},
+    %%            {var,'MyFun'}]}
     %%
-    %% will be translated to the following instruction:
+    %% will be translated to the following instructions:
     %%
-    %%     {call,4,{list,[{literal,<<"Args">>},{y,3},
-    %%                    {literal,<<"Line">>},{y,2},
-    %%                    {literal,<<"Live">>},{y,1}]}}
+    %%     {call,0,4}
+    %%     {call,1,{list,[{literal,~"Args"},{y,3},
+    %%                    {literal,~"Line"},{y,2},
+    %%                    {literal,~"Live"},{y,1}]}}
+    %%     {call,2,{list,[3,{literal, ~"M"}, {atom, handle_call},
+    %%                    258, {atom, f},
+    %%                    {literal, ~"MyFun"}]}}
     %%
     %% Note that only one register is given for each variable. It
     %% is always the last register listed.
@@ -477,26 +514,126 @@ build_bdi([{FrameSize0,Vars0}|Items], Dict0) ->
                     entry -> {atom,entry};
                     _ -> FrameSize0
                 end,
-    Vars1 = case FrameSize0 of
-                entry ->
-                    [[bdi_name_to_term(Name),Reg] ||
-                        {Name,[Reg]} <:- Vars0];
-                _ ->
-                    [[{literal,atom_to_binary(Name)},last(Regs)] ||
-                        {Name,[_|_]=Regs} <:- Vars0]
-            end,
-    Vars = append(Vars1),
-    Instr0 = {call,FrameSize,{list,Vars}},
-    {Instr,Dict1} = make_op(Instr0, Dict0),
-    {Tail,Dict2} = build_bdi(Items, Dict1),
-    {[Instr|Tail],Dict2};
-build_bdi([], Dict) ->
-    {[],Dict}.
+    FrameSizeInstr = {call,?BEAM_DEBUG_INFO_ENTRY_FRAME_SIZE,FrameSize},
+
+    VarMappingsInstr =
+        case Vars0 of
+            [] ->
+                none;
+            _ ->
+                Vars =  case FrameSize0 of
+                            entry ->
+                                [[bdi_name_to_term(Name),Reg] ||
+                                    {Name,[Reg]} <:- Vars0];
+                            _ ->
+                                [[{literal,atom_to_binary(Name)},last(Regs)] ||
+                                    {Name,[_|_]=Regs} <:- Vars0]
+                        end,
+                {call,?BEAM_DEBUG_INFO_ENTRY_VAR_MAPPINGS,{list,append(Vars)}}
+        end,
+
+    CallsInstr =
+        case maps:get(calls, Info, []) of
+            [] ->
+                none;
+            Calls ->
+                 {call,?BEAM_DEBUG_INFO_ENTRY_CALLS,{list,bdi_encode_calls(Calls)}}
+        end,
+
+    [FrameSizeInstr, VarMappingsInstr, CallsInstr].
 
 bdi_name_to_term(Int) when is_integer(Int) ->
     {integer,Int};
 bdi_name_to_term(Atom) when is_atom(Atom) ->
     {literal,atom_to_binary(Atom)}.
+
+bdi_encode_calls([{remote, M0, F0, A}|Rest]) when A>=0,A=<?MAX_ARGUMENTS->
+    M = bdi_encode_var_or_atom(M0),
+    F = bdi_encode_var_or_atom(F0),
+    [A,M,F | bdi_encode_calls(Rest)];
+bdi_encode_calls([{local, F0, A0}|Rest]) when A0>=0,A0=<?MAX_ARGUMENTS ->
+    A = A0 + (?MAX_ARGUMENTS + 1),
+    F = bdi_encode_var_or_atom(F0),
+    [A,F | bdi_encode_calls(Rest)];
+bdi_encode_calls([{var, _}=V0|Rest]) ->
+    V = bdi_encode_var_or_atom(V0),
+    [V | bdi_encode_calls(Rest)];
+bdi_encode_calls([]) ->
+    [].
+
+bdi_encode_var_or_atom({var, V}) when is_binary(V) ->
+    {literal, V};
+bdi_encode_var_or_atom({atom, A}) when is_atom(A) ->
+    {atom, A}.
+
+%%%
+%%% Build the "Recs" chunk to contain the definitions for all
+%%% native records in this module.
+%%%
+
+build_record_chunk(Anno, Dict0) ->
+    case Anno of
+        #{records := [_|_]=Defs0} ->
+            {Defs,Dict} = build_record_def(Defs0, Dict0),
+            NumFields = lists:sum([length(Fs) || {_,_,Fs} <:- Defs0]),
+            NumItems = length(Defs),
+            0 = NumItems bsr 31,                %Assertion.
+            Contents = <<?BEAM_RECORD_VERSION:32,
+                         NumItems:32,
+                         NumFields:32,
+                         (iolist_to_binary(Defs))/binary>>,
+            Chunk = chunk(~"Recs", Contents),
+            {Chunk,Dict};
+        #{} ->
+            {[],Dict0}
+    end.
+
+build_record_def([{Name,IsExported,Fs}|Defs], Dict0) ->
+    %% The native-record definitions utilizes the encoding machinery
+    %% for BEAM instructions. Each record definition is translated to:
+    %%
+    %%    {call_last,RecordName,Exported,
+    %%               {list,[FieldName,OptionalValue,...]}}
+    %%
+    %% Where:
+    %%
+    %%    RecordName := atom(),
+    %%    Exported := boolean(),
+    %%    FieldName := atom(),
+    %%    OptionalValue := term() | Absent
+    %%    Absent := 0 tagged with the u tag
+    %%
+    %% The only reason the `call_last` instruction is used is because
+    %% it has three operands.
+    %%
+    %% As an example, the following non-exported native-record:
+    %%
+    %%    -struct user, {
+    %%       id = -1,
+    %%       name,
+    %%       city
+    %%    }.
+    %%
+    %% will be translated to the following instruction:
+    %%
+    %%     {call_last,{atom,user},{atom,false},
+    %%                {list,[{atom,id},{literal,-1},
+    %%                       {atom,name},0,
+    %%                       {atom,city},0]}}
+    Def = build_record_def_fs(Fs),
+    Instr0 = {call_last,{atom,Name},{atom,IsExported},{list,Def}},
+    {Instr,Dict1} = make_op(Instr0, Dict0),
+    {Tail,Dict2} = build_record_def(Defs, Dict1),
+    {[Instr|Tail],Dict2};
+build_record_def([], Dict) ->
+    {[],Dict}.
+
+build_record_def_fs([{Key,Val}|Fs]) when is_atom(Key) ->
+    [{atom,Key},{literal,Val}|build_record_def_fs(Fs)];
+build_record_def_fs([Key|Fs]) when is_atom(Key) ->
+    [{atom,Key},0|build_record_def_fs(Fs)];
+build_record_def_fs([]) ->
+    [].
 
 %%%
 %%% Functions for assembling BEAM instruction.
@@ -507,8 +644,10 @@ bif_type(fadd, 2)   -> {op,fadd};
 bif_type(fsub, 2)   -> {op,fsub};
 bif_type(fmul, 2)   -> {op,fmul};
 bif_type(fdiv, 2)   -> {op,fdiv};
+bif_type(get_record_field, 3) -> {op,get_record_field};
 bif_type(_, 1)      -> bif1;
-bif_type(_, 2)      -> bif2.
+bif_type(_, 2)      -> bif2;
+bif_type(_, 3)      -> bif3.
 
 make_op({'%',_}, Dict) ->
     {[],Dict};
@@ -677,7 +816,7 @@ flag_to_bit(unsigned)-> 16#00;
 %%flag_to_bit(exact)   -> 16#08;
 flag_to_bit(native)  -> 16#10;
 flag_to_bit({anno,_}) -> 0.
-    
+
 encode_list([H|T], Dict0, Acc) when not is_list(H) ->
     {Enc,Dict} = encode_arg(H, Dict0),
     encode_list(T, Dict, [Acc,Enc]);

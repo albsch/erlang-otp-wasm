@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -108,7 +108,7 @@ or if bad arguments are specified.
 > Blocking signaling can, for example, cause call timeouts in `gen_event`
 > to be significantly delayed.
 
-## See Also
+### See Also
 
 `m:supervisor`, `m:sys`
 """.
@@ -727,7 +727,7 @@ If the event manager fails to start within the specified start timeout
 `{timeout, Time}`, which is very unlikely since the start
 does not interact with other processes, the function returns
 `{error, timeout}` and the failed event manager is killed with
-[`exit(_, kill)`](`erlang:exit/2`).
+[`exit_signal(_, kill)`](`erlang:exit_signal/2`).
 
 If `start_link/1,2` returns `{error, _}`, the started event manager process
 has terminated.  If an `'EXIT'` message was delivered
@@ -903,7 +903,7 @@ notify(M, Event) -> send(M, {notify, Event}).
 -doc """
 Send a synchronous event notification to an event manager.
 
-The event is sent to `EventMgrRef` that callsr calls
+The event is sent to `EventMgrRef` that calls
 [`Module:handle_event/2`](`c:handle_event/2`) for each installed
 event handler to handle the event. This function will return `ok`
 after the event has been handled by all event handlers.
@@ -1757,7 +1757,7 @@ system_terminate(Reason, Parent, _Debug, [ServerName, MSL, _HibernateAfterTimeou
 %%-----------------------------------------------------------------
 -doc false.
 system_code_change([ServerName, MSL, HibernateAfterTimeout, Hib], Module, OldVsn, Extra) ->
-    MSL1 = lists:zf(fun(H) when H#handler.module =:= Module ->
+    MSL1 = lists:filtermap(fun(H) when H#handler.module =:= Module ->
 			    {ok, NewState} =
 				Module:code_change(OldVsn,
 						   H#handler.state, Extra),

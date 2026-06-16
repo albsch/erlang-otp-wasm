@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 1996-2025. All Rights Reserved.
+# Copyright Ericsson AB 1996-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -39,6 +39,7 @@ RELSYSDIR = $(RELEASE_PATH)/lib/tools-$(VSN)
 
 MODULES= \
 	cover                \
+	crashdump            \
 	eprof                \
 	tprof                \
 	fprof                \
@@ -80,7 +81,11 @@ CSS = $(PRIVDIR)/styles.css
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-ERL_COMPILE_FLAGS += -Werror
+ERL_COMPILE_FLAGS += -Werror +nowarn_deprecated_catch
+
+ifeq ($(ERL_DETERMINISTIC),yes)
+	DEP_SKIP_FILES = xref_parser.erl
+endif
 
 # ----------------------------------------------------
 # Targets
@@ -119,3 +124,8 @@ release_spec: opt
 	$(INSTALL_DATA) $(CSS) "$(RELSYSDIR)/priv"
 
 release_docs_spec:
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

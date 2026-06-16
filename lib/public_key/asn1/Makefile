@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 2008-2025. All Rights Reserved.
+# Copyright Ericsson AB 2008-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -59,9 +59,11 @@ ASN_MODULES = \
           ECPrivateKey \
 	  KEMAlgorithmInformation-2023 \
 	  X509-ML-DSA-2025 \
+	  X509-ML-KEM-2025 \
 	  SLH-DSA-Module-2024 \
           OCSP-2024-08 \
           OTP-PKIX \
+	  OTP-PKIX-Relaxed \
           PKCS-1 PKCS-3 PKCS-10 \
           PKIX-CommonTypes-2009 \
           PKIX-X400Address-2009 \
@@ -80,7 +82,7 @@ ASN_MODULES = \
 ASN_ASNS = $(ASN_MODULES:%=%.asn1)
 ASN_ERLS = $(ASN_TOP:%=$(ESRC)/%.erl)
 ASN_HRLS = PKCS-FRAME.hrl
-ASN_CONFIGS = OTP-PKIX.asn1config PKIX1Explicit-2009.asn1config
+ASN_CONFIGS = OTP-PKIX.asn1config OTP-PKIX-Relaxed.asn1config PKIX1Explicit-2009.asn1config
 ASN_DBS = $(ASN_MODULES:%=%.asn1db)
 ASN_TABLES = $(ASN_MODULES:%=%.table)
 
@@ -94,7 +96,7 @@ HRL_FILES = $(ASN_HRLS:%=$(INCLUDE)/%)
 # FLAGS
 # ----------------------------------------------------
 EXTRA_ERLC_FLAGS = 
-ERL_COMPILE_FLAGS += $(EXTRA_ERLC_FLAGS)
+ERL_COMPILE_FLAGS += $(EXTRA_ERLC_FLAGS) +nowarn_deprecated_catch
 
 ASN_FLAGS = -bber +der +noobj +asn1config
 

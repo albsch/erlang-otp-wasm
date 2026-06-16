@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2020-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2020-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -147,7 +147,7 @@ struct BeamCodeLineTab_ {
         Uint16* p2;
         Uint32* p4;
     } loc_tab;
-    const void** func_tab[1];
+    const void** func_tab[];
 };
 
 /*
@@ -157,6 +157,7 @@ typedef struct {
     Uint32 location_index;
     Sint16 frame_size;
     Uint16 num_vars;
+    Uint32 num_calls_terms;
     Eterm *first;
 } BeamDebugItem;
 

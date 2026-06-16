@@ -9,7 +9,7 @@
 
 {application, ssh,
  [{description, "SSH-2 for Erlang/OTP"},
-  {vsn, "5.5.2"},
+  {vsn, "6.0.1"},
   {modules, [ssh,
 	     ssh_app,
 	     ssh_acceptor,
@@ -71,6 +71,6 @@
 			  "erts-14.0",
 			  "kernel-10.3",
 			  "public_key-1.6.1",
-                          "stdlib-6.0","stdlib-5.0",
+                          "stdlib-8.0",
                           "runtime_tools-1.15.1"
 			 ]}]}.

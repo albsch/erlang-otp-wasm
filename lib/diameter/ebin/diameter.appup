@@ -21,7 +21,7 @@
 %% %CopyrightEnd%
 %%
 
-{"2.6.1",
+{"2.7.1",
  [
   {<<"0\\..*">>, [{restart_application, diameter}]},
   {<<"1\\..*">>, [{restart_application, diameter}]},

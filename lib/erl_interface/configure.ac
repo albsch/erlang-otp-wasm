@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 2000-2026. All Rights Reserved.
+# Copyright Ericsson AB 2000-2025. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -95,46 +95,6 @@ AC_ARG_ENABLE(ei-dynamic-lib,
   esac ],
 [ DYNAMIC_LIB=no ])
 AC_SUBST(DYNAMIC_LIB)
-
-AC_ARG_ENABLE(use-embedded-3pp-alternatives,
-AS_HELP_STRING([--enable-use-embedded-3pp-alternatives],
-               [use all available alternatives instead of embedded 3pps.
-                Implies all --disable-builtin-* options. Can be overridden
-                by individual --enable-builtin-* options.])
-AS_HELP_STRING([--disable-use-embedded-3pp-alternatives],
-               [do not use any alternatives to embedded 3pps.
-                Implies all --enable-builtin-* options. Can be overridden
-                by individual --disable-builtin-* options.]),
-[ case "$enableval" in
-    no)
-      builtin_openssl=yes
-      ;;
-    *)
-      builtin_openssl=no
-      ;;
-  esac
-])
-
-AC_ARG_ENABLE(builtin-openssl,
-AS_HELP_STRING([--enable-builtin-openssl],
-               [use our own built-in OpenSSL for MD5 (default)])
-AS_HELP_STRING([--disable-builtin-openssl],
-               [use an alternative for built-in OpenSSL]),
-  [case "$enableval" in
-      no) builtin_openssl=no ;;
-      *)  builtin_openssl=yes ;;
-   esac])
-
-AS_IF([test "$builtin_openssl" = "no"],
-      [
-        ERTS_USE_BUILTIN_OPENSSL=no
-      ],
-      [
-        AC_DEFINE(ERTS_USE_BUILTIN_OPENSSL, [1], [Define if builtin OpenSSL should be used for MD5])
-        ERTS_USE_BUILTIN_OPENSSL=yes
-      ])
-AC_SUBST(ERTS_USE_BUILTIN_OPENSSL)
-
 
 dnl ----------------------------------------------------------------------
 dnl Checks for programs

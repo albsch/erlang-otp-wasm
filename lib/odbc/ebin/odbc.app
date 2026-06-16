@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application, odbc,
  [{description, "Erlang ODBC application"},
-  {vsn, "2.16.1"},
+  {vsn, "2.17"},
   {modules, [
 	     odbc,
 	     odbc_app,

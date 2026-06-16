@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -127,7 +127,7 @@ the local function handler argument. A possible use is to call
 to be called.
 """.
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 %% An evaluator for Erlang abstract syntax.
 
@@ -354,7 +354,7 @@ expr(E, Bs, Lf, Ef) ->
 
 -doc false.
 check_command(Es, Bs) ->
-    Opts = [bitlevel_binaries,binary_comprehension],
+    Opts = [{features,erl_features:enabled()}],
     case erl_lint:exprs_opt(Es, bindings(Bs), Opts) of
         {ok,_Ws} ->
             ok;
@@ -450,14 +450,138 @@ expr({mc,_,E,Qs}, Bs, Lf, Ef, RBs, FUVs) ->
 expr({tuple,_,Es}, Bs0, Lf, Ef, RBs, FUVs) ->
     {Vs,Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
     ret_expr(list_to_tuple(Vs), Bs, RBs);
-expr({record_field,Anno,_,Name,_}, Bs, _Lf, Ef, RBs, _FUVs) ->
+expr({record_field,_Anno,{atom,_,N},V0}, Bs0, Lf, Ef, RBs, FUVs) ->
+    {value,V1,Bs1} = expr(V0, Bs0, Lf, Ef, RBs, FUVs),
+    ret_expr({N,V1}, Bs1, RBs);
+expr({record_field,Anno,Name,_}, Bs, _Lf, Ef, RBs, _FUVs) ->
     apply_error({undef_record,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
+expr({record_field,Anno,{var,_,Src0},{M,N},{atom,_,K}}, Bs, _Lf, Ef, RBs, _FUVs) ->
+    case binding(Src0, Bs) of
+        {value, Src1} ->
+            case is_record(Src1, M, N) of
+                true ->
+                    Val = records:get(K, Src1),
+                    ret_expr(Val, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end;
+expr({record_field,Anno,{var,_,Src0},[],{atom,_,K}}, Bs, _Lf, Ef, RBs, _FUVs) ->
+    case binding(Src0, Bs) of
+        {value, Src1} ->
+            case is_record(Src1) of
+                true ->
+                    Val = records:get(K, Src1),
+                    ret_expr(Val, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end;
+expr({record_field,Anno,{var,_,Src0},N,{atom,_,K}}, Bs, _Lf, Ef, RBs, _FUVs) ->
+    case binding(Src0, Bs) of
+        {value, Src1} ->
+            case is_record(Src1, N) of
+                true ->
+                    Val = records:get(K, Src1),
+                    ret_expr(Val, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end;
+expr({record_field,Anno,Src,Name,K}, Bs, _Lf, Ef, RBs, _FUVs) ->
+    case Src of
+        {var,_,_V} -> ok;
+        _ -> apply_error({badarg,Src}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end,
+    case K of
+        {atom,_,_Key} -> ok;
+        _ -> apply_error({badarg,K}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end,
+    apply_error({badarg,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
 expr({record_index,Anno,Name,_}, Bs, _Lf, Ef, RBs, _FUVs) ->
     apply_error({undef_record,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
-expr({record,Anno,Name,_}, Bs, _Lf, Ef, RBs, _FUVs) ->
+expr({record,Anno,{M=shell_default,N},Es}, Bs0, Lf, Ef, RBs, FUVs) ->
+    Error = [{Err,{{M,N},F}} || {record_field,_,{atom,_,F},{nil,Err}} <- Es,
+                    Err =:= novalue orelse Err =:= badfield],
+    case Error of
+        [] ->
+            {Vs,Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
+            R = records:create(M, N, Vs, #{is_exported=>false}),
+            ret_expr(R, Bs, RBs);
+        [E|_] -> apply_error(E, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+    end;
+expr({record,Anno,{M,N}, Es}, Bs0, Lf, Ef, RBs, FUVs) ->
+    try records:get_definition(M, N) of
+        {Ops, Defs} ->
+            {Vs, Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
+            case native_record_init(Defs, Vs, []) of
+                {novalue, K} ->
+                    apply_error({novalue,{{M,N},K}}, ?STACKTRACE, Anno, Bs0, Ef, RBs);
+                {badfield, F} ->
+                    apply_error({badfield,{{M,N},F}}, ?STACKTRACE, Anno, Bs0, Ef, RBs);
+                Acc ->
+                    R = records:create(M, N, Acc, Ops),
+                    ret_expr(R, Bs, RBs)
+            end
+    catch
+        _:_ ->
+            apply_error({undef_record,{M, N}}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+    end;
+expr({record,Anno,Name,_Es}, Bs, _Lf, Ef, RBs, _FUVs) ->
     apply_error({undef_record,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
-expr({record,Anno,_,Name,_}, Bs, _Lf, Ef, RBs, _FUVs) ->
-    apply_error({undef_record,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
+expr({record,Anno,{var,_,Src0},{M,N},Es}, Bs0, Lf, Ef, RBs, FUVs) ->
+    case binding(Src0, Bs0) of
+        {value, Src1} ->
+            case is_record(Src1, M, N) of
+                true ->
+                    {Vs,Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
+                    Updates = #{K => V || {K, V} <:- Vs},
+                    R = records:update(Src1, M, N, Updates),
+                    ret_expr(R, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+    end;
+expr({record,Anno,{var,_,Src0},[],Es}, Bs0, Lf, Ef, RBs, FUVs) ->
+    case binding(Src0, Bs0) of
+        {value, Src1} ->
+            case is_record(Src1) of
+                true ->
+                    M = records:get_module(Src1),
+                    N = records:get_name(Src1),
+                    {Vs,Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
+                    Updates = #{K => V || {K, V} <:- Vs},
+                    R = records:update(Src1, M, N, Updates),
+                    ret_expr(R, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+    end;
+expr({record,Anno,{var,_,Src0},N,Es}, Bs0, Lf, Ef, RBs, FUVs) ->
+    case binding(Src0, Bs0) of
+        {value, Src1} ->
+            case is_record(Src1, N) of
+                true ->
+                    {Vs,Bs} = expr_list(Es, Bs0, Lf, Ef, FUVs),
+                    Updates = #{K => V || {K, V} <:- Vs},
+                    R = records:update(Src1, shell_default, N, Updates),
+                    ret_expr(R, Bs, RBs);
+                false ->
+                    apply_error({badarg,Src1}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+            end;
+        _ -> apply_error({unbound,Src0}, ?STACKTRACE, Anno, Bs0, Ef, RBs)
+    end;
+expr({record,Anno,Src,Name,_Es}, Bs, _Lf, Ef, RBs, _FUVs) ->
+    case Src of
+        {var,_,_V} -> ok;
+        _ -> apply_error({badarg,Src}, ?STACKTRACE, Anno, Bs, Ef, RBs)
+    end,
+    apply_error({badarg,Name}, ?STACKTRACE, Anno, Bs, Ef, RBs);
 
 %% map
 expr({map,Anno,Binding,Es}, Bs0, Lf, Ef, RBs, FUVs) ->
@@ -731,7 +855,7 @@ find_maxline(LC) ->
                     true ->
                         L = erl_anno:line(A),
                         case
-                            is_integer(L) and (L > get('$erl_eval_max_line'))
+                            is_integer(L) andalso L > get('$erl_eval_max_line')
                         of
                             true -> put('$erl_eval_max_line', L);
                             false -> ok
@@ -929,28 +1053,30 @@ do_apply(F, Anno, FunOrModFun, Args) when is_function(F, 3) ->
 do_apply(F, _Anno, FunOrModFun, Args) when is_function(F, 2) ->
     F(FunOrModFun, Args).
 
-%% eval_lc(Expr, [Qualifier], Bindings, LocalFunctionHandler,
+%% eval_lc(ExprOrExprs, [Qualifier], Bindings, LocalFunctionHandler,
 %%         ExternalFuncHandler, RetBindings) ->
 %%	{value,Value,Bindings} | Value
 
+eval_lc(Es, Qs, Bs, Lf, Ef, RBs, FUVs) when is_list(Es) ->
+    ret_expr(lists:reverse(eval_lc1(Es, Qs, Bs, Lf, Ef, FUVs, [])), Bs, RBs);
 eval_lc(E, Qs, Bs, Lf, Ef, RBs, FUVs) ->
-    ret_expr(lists:reverse(eval_lc1(E, Qs, Bs, Lf, Ef, FUVs, [])), Bs, RBs).
+    eval_lc([E], Qs, Bs, Lf, Ef, RBs, FUVs).
 
-eval_lc1(E, [{zip, Anno, Gens}|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
+eval_lc1(Es, [{zip, Anno, Gens}|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
     {VarList, Bs1} = convert_gen_values(Gens, [], Bs0, Lf, Ef, FUVs),
-    eval_zip(E, [{zip, Anno, VarList}|Qs], Bs1, Lf, Ef, FUVs, Acc0, fun eval_lc1/7);
-eval_lc1(E, [Q|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
+    eval_zip(Es, [{zip, Anno, VarList}|Qs], Bs1, Lf, Ef, FUVs, Acc0, fun eval_lc1/7);
+eval_lc1(Es, [Q|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
     case is_generator(Q) of
         true ->
-            CF = fun(Bs, Acc) -> eval_lc1(E, Qs, Bs, Lf, Ef, FUVs, Acc) end,
+            CF = fun(Bs, Acc) -> eval_lc1(Es, Qs, Bs, Lf, Ef, FUVs, Acc) end,
             eval_generator(Q, Bs0, Lf, Ef, FUVs, Acc0, CF);
         false ->
-            CF = fun(Bs) -> eval_lc1(E, Qs, Bs, Lf, Ef, FUVs, Acc0) end,
+            CF = fun(Bs) -> eval_lc1(Es, Qs, Bs, Lf, Ef, FUVs, Acc0) end,
             eval_filter(Q, Bs0, Lf, Ef, CF, FUVs, Acc0)
     end;
-eval_lc1(E, [], Bs, Lf, Ef, FUVs, Acc) ->
-    {value,V,_} = expr(E, Bs, Lf, Ef, none, FUVs),
-    [V|Acc].
+eval_lc1(Es, [], Bs, Lf, Ef, FUVs, Acc) ->
+    {Vs, _} = expr_list(Es, Acc, Bs, Bs, Lf, Ef, FUVs),
+    Vs.
 
 %% convert values for generator vars from abstract form to flattened lists
 convert_gen_values([{Generate, Anno, P, L0}|Qs], Acc, Bs0, Lf, Ef,FUVs)
@@ -1164,6 +1290,29 @@ is_generator_end([]) -> true;
 is_generator_end(<<>>) -> true;
 is_generator_end(Other) -> Other =:= #{}.
 
+native_record_init([{K, V}|Defs], Vs, Acc) ->
+    %% Fill in fields that have default values.
+    case lists:keyfind(K, 1, Vs) of
+        false ->
+            native_record_init(Defs, Vs, [{K, V}|Acc]);
+        Res ->
+            native_record_init(Defs, Vs, [Res|Acc])
+    end;
+native_record_init([K|Defs], Vs, Acc) ->
+    %% Fill in fields with no default values.
+    case lists:keyfind(K, 1, Vs) of
+        false ->
+            {novalue, K};
+        Res ->
+            native_record_init(Defs, Vs, [Res|Acc])
+    end;
+native_record_init([], Vs, Acc) ->
+    %% Report error for fields that don't exist in the definition.
+    case lists:partition(fun({K, _}) -> lists:keyfind(K, 1, Acc) =:= false end, Vs) of
+        {[], _} -> lists:reverse(Acc);
+        {[{F,_}|_], _} ->{badfield, F}
+    end.
+
 get_vars(Lit) ->
     get_vars(Lit, []).
 
@@ -1218,30 +1367,37 @@ eval_bc1(E, [], Bs, Lf, Ef, FUVs, Acc) ->
     {value,V,_} = expr(E, Bs, Lf, Ef, none, FUVs),
     <<Acc/bitstring,V/bitstring>>.
 
-%% eval_mc(Expr, [Qualifier], Bindings, LocalFunctionHandler,
+%% eval_mc(ExprOrExprs, [Qualifier], Bindings, LocalFunctionHandler,
 %%         ExternalFuncHandler, RetBindings) ->
 %%	{value,Value,Bindings} | Value
 
-eval_mc(E, Qs, Bs, Lf, Ef, RBs, FUVs) ->
-    L = eval_mc1(E, Qs, Bs, Lf, Ef, FUVs, []),
+eval_mc(Es, Qs, Bs, Lf, Ef, RBs, FUVs) when is_list(Es) ->
+    L = eval_mc1(Es, Qs, Bs, Lf, Ef, FUVs, []),
     Map = maps:from_list(reverse(L)),
-    ret_expr(Map, Bs, RBs).
+    ret_expr(Map, Bs, RBs);
+eval_mc(E, Qs, Bs, Lf, Ef, RBs, FUVs) ->
+    eval_mc([E], Qs, Bs, Lf, Ef, RBs, FUVs).
 
-eval_mc1(E, [{zip, Anno, Gens}|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
+eval_mc1(Es, [{zip, Anno, Gens}|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
     {VarList, Bs1} = convert_gen_values(Gens, [], Bs0, Lf, Ef, FUVs),
-    eval_zip(E, [{zip, Anno, VarList}|Qs], Bs1, Lf, Ef, FUVs, Acc0, fun eval_mc1/7);
-eval_mc1(E, [Q|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
+    eval_zip(Es, [{zip, Anno, VarList}|Qs], Bs1, Lf, Ef, FUVs, Acc0, fun eval_mc1/7);
+eval_mc1(Es, [Q|Qs], Bs0, Lf, Ef, FUVs, Acc0) ->
     case is_generator(Q) of
         true ->
-            CF = fun(Bs, Acc) -> eval_mc1(E, Qs, Bs, Lf, Ef, FUVs, Acc) end,
+            CF = fun(Bs, Acc) -> eval_mc1(Es, Qs, Bs, Lf, Ef, FUVs, Acc) end,
             eval_generator(Q, Bs0, Lf, Ef, FUVs, Acc0, CF);
         false ->
-            CF = fun(Bs) -> eval_mc1(E, Qs, Bs, Lf, Ef, FUVs, Acc0) end,
+            CF = fun(Bs) -> eval_mc1(Es, Qs, Bs, Lf, Ef, FUVs, Acc0) end,
             eval_filter(Q, Bs0, Lf, Ef, CF, FUVs, Acc0)
     end;
-eval_mc1({map_field_assoc,Lfa,K0,V0}, [], Bs, Lf, Ef, FUVs, Acc) ->
-    {value,KV,_} = expr({tuple,Lfa,[K0,V0]}, Bs, Lf, Ef, none, FUVs),
-    [KV|Acc].
+eval_mc1(Es, [], Bs, Lf, Ef, FUVs, Acc) ->
+    eval_mc2(Es, Bs, Lf, Ef, FUVs, Acc).
+
+eval_mc2([{map_field_assoc,_,K0,V0}|Es], Bs, Lf, Ef, FUVs, Acc) ->
+    {[K,V],_} = expr_list([K0,V0], Bs, Lf, Ef, FUVs),
+    eval_mc2(Es, Bs, Lf, Ef, FUVs, [{K,V}|Acc]);
+eval_mc2([], _Bs, _Lf, _Ef, _FUVs, Acc) ->
+    Acc.
 
 eval_zip(E, [{zip, Anno, VarList}|Qs], Bs0, Lf, Ef, FUVs, Acc0, Fun) ->
     Gens = case check_bad_generators(VarList, {Bs0, Lf, Ef}, []) of
@@ -1263,6 +1419,8 @@ eval_zip(E, [{zip, Anno, VarList}|Qs], Bs0, Lf, Ef, FUVs, Acc0, Fun) ->
             eval_zip(E, [{zip, Anno, reverse(Rest)}|Qs], Bs0, Lf, Ef, FUVs, Acc1, Fun)
     end.
 
+eval_generator({match,Anno,P,E}, Bs0, Lf, Ef, FUVs, Acc0, CompFun) ->
+    eval_generator({generate_strict,Anno,P,{cons,Anno,E,{nil,Anno}}}, Bs0, Lf, Ef, FUVs, Acc0, CompFun);
 eval_generator({Generate,Anno,P,L0}, Bs0, Lf, Ef, FUVs, Acc0, CompFun)
   when Generate =:= generate;
        Generate =:= generate_strict ->
@@ -1367,6 +1525,7 @@ eval_filter(F, Bs0, Lf, Ef, CompFun, FUVs, Acc) ->
 	    end
     end.
 
+is_generator({match,_,_,_}) -> true;
 is_generator({generate,_,_,_}) -> true;
 is_generator({generate_strict,_,_,_}) -> true;
 is_generator({b_generate,_,_,_}) -> true;
@@ -1498,13 +1657,14 @@ expr_list(Es, Bs, Lf, Ef) ->
     expr_list(Es, Bs, Lf, Ef, empty_fun_used_vars()).
 
 expr_list(Es, Bs, Lf, Ef, FUVs) ->
-    expr_list(Es, [], Bs, Bs, Lf, Ef, FUVs).
+    {Vs, Bs1} = expr_list(Es, [], Bs, Bs, Lf, Ef, FUVs),
+    {reverse(Vs), Bs1}.
 
 expr_list([E|Es], Vs, BsOrig, Bs0, Lf, Ef, FUVs) ->
     {value,V,Bs1} = expr(E, BsOrig, Lf, Ef, none, FUVs),
     expr_list(Es, [V|Vs], BsOrig, merge_bindings(Bs1, Bs0, element(2, E), Ef), Lf, Ef, FUVs);
 expr_list([], Vs, _, Bs, _Lf, _Ef, _FUVs) ->
-    {reverse(Vs),Bs}.
+    {Vs,Bs}.
 
 eval_op(Op, Arg1, Arg2, Anno, Bs, Ef, RBs) ->
     do_apply(erlang, Op, [Arg1,Arg2], Anno, Bs, Ef, RBs).
@@ -1706,11 +1866,14 @@ type_test(Test) -> Test.
 %% binsize variable).
 
 match(Pat, Term, Anno, Bs, BBs, Ef) ->
-    case catch match1(Pat, Term, Bs, BBs, Ef) of
-	invalid ->
-            apply_error({illegal_pattern,to_term(Pat)}, ?STACKTRACE, Anno, Bs, Ef, none);
-	Other ->
-	    Other
+    try match1(Pat, Term, Bs, BBs, Ef) of
+        Result -> Result
+    catch
+        throw:nomatch ->
+            nomatch;
+        throw:invalid ->
+            apply_error({illegal_pattern,to_term(Pat)}, ?STACKTRACE, Anno,
+                        Bs, Ef, none)
     end.
 
 string_to_conses([], _, Tail) -> Tail;
@@ -1774,6 +1937,10 @@ match1({tuple,_,_}, _, _Bs, _BBs, _Ef) ->
 match1({map,_,Fs}, #{}=Map, Bs, BBs, Ef) ->
     match_map(Fs, Map, Bs, BBs, Ef);
 match1({map,_,_}, _, _Bs, _BBs, _Ef) ->
+    throw(nomatch);
+match1({record,_,_,_}=R, Record, Bs, BBs, Ef) when is_record(Record) ->
+    match_record(R, Record, Bs, BBs, Ef);
+match1({record,_,_,_}, _, _Bs, _BBs, _Ef) ->
     throw(nomatch);
 match1({bin, _, Fs}, <<_/bitstring>>=B, Bs0, BBs, Ef) ->
     EvalFun = fun(E, Bs) ->
@@ -1839,6 +2006,26 @@ match_map([{map_field_exact, _, K, V}|Fs], Map, Bs0, BBs, Ef) ->
     {match, Bs} = match1(V, Vm, Bs0, BBs, Ef),
     match_map(Fs, Map, Bs, BBs, Ef);
 match_map([], _, Bs, _, _) ->
+    {match, Bs}.
+
+match_record({record, _, N, Fs}, R, Bs, BBs, Ef) ->
+    case {N, records:get_module(R), records:get_name(R)} of
+        {{Mod, Name}, Mod, Name} -> ok;
+        {N, _, N} -> ok;
+        _ -> throw(nomatch)
+    end,
+    KVs = [{K, V} || {record_field, _, {atom, _, K}, V} <- Fs],
+    match_record_field(KVs, R, Bs, BBs, Ef).
+
+match_record_field([{K, V}|KVs], R, Bs0, BBs, Ef) ->
+    RV = try
+        records:get(K, R)
+    catch error:_ ->
+        throw(nomatch)
+    end,
+    {match, Bs} = match1(V, RV, Bs0, BBs, Ef),
+    match_record_field(KVs, R, Bs, BBs, Ef);
+match_record_field([], _, Bs, _, _) ->
     {match, Bs}.
 
 %% match_list(PatternList, TermList, Anno, NewBindings, Bindings, ExternalFunHnd) ->
@@ -2012,11 +2199,15 @@ tokens_fixup([T|Ts]=Ts0) ->
     end.
 
 token_fixup(Ts) ->
-    {AnnoL, NewTs, FixupTag} = unscannable(Ts),
-    String = lists:append([erl_anno:text(A) || A <- AnnoL]),
-    _ = validate_tag(FixupTag, String),
-    NewAnno = erl_anno:set_text(fixup_text(FixupTag), hd(AnnoL)),
-    {{string, NewAnno, String}, NewTs}.
+    case unscannable(Ts) of
+        {AnnoL, NewTs, FixupTag} ->
+            String = lists:append([erl_anno:text(A) || A <- AnnoL]),
+            _ = validate_tag(FixupTag, String),
+            NewAnno = erl_anno:set_text(fixup_text(FixupTag), hd(AnnoL)),
+            {{string, NewAnno, String}, NewTs};
+        false ->
+            {hd(Ts), tl(Ts)}
+    end.
 
 unscannable([{'#', A1}, {var, A2, 'Fun'}, {'<', A3}, {atom, A4, _},
              {'.', A5}, {float, A6, _}, {'>', A7}|Ts]) ->
@@ -2033,7 +2224,9 @@ unscannable([{'#', A1}, {var, A2, 'Port'}, {'<', A3}, {float, A4, _},
     {[A1, A2, A3, A4, A5], Ts, port};
 unscannable([{'#', A1}, {var, A2, 'Ref'}, {'<', A3}, {float, A4, _},
              {'.', A5}, {float, A6, _}, {'>', A7}|Ts]) ->
-    {[A1, A2, A3, A4, A5, A6, A7], Ts, reference}.
+    {[A1, A2, A3, A4, A5, A6, A7], Ts, reference};
+unscannable(_) ->
+    false.
 
 expr_fixup({string,A,S}=T) ->
     try string_fixup(A, S, T) of
@@ -2192,23 +2385,25 @@ is_constant_expr(Expr) ->
     end.
 
 eval_expr(Expr) ->
-    case catch ev_expr(Expr) of
-        X when is_integer(X) -> {ok, X};
-        X when is_float(X) -> {ok, X};
+    try ev_expr(Expr) of
+        X when is_number(X) -> {ok, X};
         X when is_atom(X) -> {ok,X};
-        {'EXIT',Reason} -> {error, Reason};
         _ -> {error, badarg}
+    catch
+        error:Reason ->
+            Reason
     end.
 
 -doc false.
 partial_eval(Expr) ->
     Anno = anno(Expr),
-    case catch ev_expr(Expr) of
+    try ev_expr(Expr) of
 	X when is_integer(X) -> ret_expr(Expr,{integer,Anno,X});
-	X when is_float(X) -> ret_expr(Expr,{float,Anno,X});
+	X when is_float(X) -> ret_expr(Expr, {float,Anno,X});
 	X when is_atom(X) -> ret_expr(Expr,{atom,Anno,X});
-	_ ->
-	    Expr
+	_ -> Expr
+    catch
+        error:_ -> Expr
     end.
 
 ev_expr({op,_,Op,L,R}) -> erlang:Op(ev_expr(L), ev_expr(R));
@@ -2221,12 +2416,6 @@ ev_expr({tuple,_,Es}) ->
     list_to_tuple([ev_expr(X) || X <- Es]);
 ev_expr({nil,_}) -> [];
 ev_expr({cons,_,H,T}) -> [ev_expr(H) | ev_expr(T)].
-%%ev_expr({call,Anno,{atom,_,F},As}) ->
-%%    true = erl_internal:guard_bif(F, length(As)),
-%%    apply(erlang, F, [ev_expr(X) || X <- As]);
-%%ev_expr({call,Anno,{remote,_,{atom,_,erlang},{atom,_,F}},As}) ->
-%%    true = erl_internal:guard_bif(F, length(As)),
-%%    apply(erlang, F, [ev_expr(X) || X <- As]);
 
 %% eval_str(InStr) -> {ok, OutStr} | {error, ErrStr'}
 %%   InStr must represent a body
@@ -2241,37 +2430,55 @@ ev_expr({cons,_,H,T}) -> [ev_expr(H) | ev_expr(T)].
                       {'ok', string()} | {'error', string()}.
 
 eval_str(Str) when is_list(Str) ->
-    case erl_scan:tokens([], Str, 0) of
-	{more, _} ->
-	    {error, "Incomplete form (missing .<cr>)??"};
-	{done, {ok, Toks, _}, Rest} ->
-	    case all_white(Rest) of
-		true ->
-		    case erl_parse:parse_exprs(Toks) of
-			{ok, Exprs} ->
-			    case catch erl_eval:exprs(Exprs, erl_eval:new_bindings()) of
-				{value, Val, _} ->
-				    {ok, Val};
-				Other ->
-				    {error, ?result("*** eval: ~p", [Other])}
-			    end;
-			{error, {_Location, Mod, Args}} ->
-                            Msg = ?result("*** ~ts",[Mod:format_error(Args)]),
-                            {error, Msg}
-		    end;
-		false ->
-		    {error, ?result("Non-white space found after "
-				    "end-of-form :~ts", [Rest])}
-		end
+    maybe
+        {ok, Toks} ?= do_scan_str(Str),
+        {ok, Exprs} ?= erl_parse:parse_exprs(Toks),
+        do_eval_str(Exprs)
+    else
+        {error, {_Location, Mod, Args}} ->
+            Msg = ?result(~"*** ~ts", [Mod:format_error(Args)]),
+            {error, Msg};
+        {error, Error} when is_list(Error) ->
+            {error, Error}
     end;
 eval_str(Bin) when is_binary(Bin) ->
     eval_str(binary_to_list(Bin)).
 
+do_scan_str(Str) ->
+    case erl_scan:tokens([], Str, 0) of
+        {done, {ok, Toks, _}, Rest} ->
+            case all_white(Rest) of
+                true ->
+                    {ok, Toks};
+                false ->
+                    Fmt = ~"*** Non-white space found after end-of-form: ~ts",
+                    {error, ?result(Fmt, [Rest])}
+            end;
+        {more, _} ->
+            {error, ?result(~"*** Incomplete form (missing .<cr>?)", [])}
+    end.
+
+do_eval_str(Exprs) ->
+    try exprs(Exprs, erl_eval:new_bindings()) of
+        {value, Val, _} ->
+            {ok, Val}
+    catch
+        error:Reason ->
+            {error, ?result(~"*** eval failed: ~p",
+                            [Reason])};
+        throw:Reason ->
+            {error, ?result(~"*** eval failed with thrown exception: ~p",
+                            [Reason])};
+        exit:Reason ->
+            {error, ?result(~"*** eval failed with exit exception: ~p",
+                            [Reason])}
+    end.
+
 all_white([$\s|T]) -> all_white(T);
 all_white([$\n|T]) -> all_white(T);
 all_white([$\t|T]) -> all_white(T);
-all_white([])      -> true;
-all_white(_)       -> false.
+all_white([_|_])   -> false;
+all_white([])      -> true.
 
 ret_expr(_Old, New) ->
     %%    io:format("~w: reduced ~s => ~s~n",

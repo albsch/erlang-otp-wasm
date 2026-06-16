@@ -688,7 +688,7 @@ UWord erts_sys_get_large_page_size(void);
 /* Size of misc memory allocated from system dependent code */
 Uint erts_sys_misc_mem_sz(void);
 
-/* erl_errno_str.c & erl_posix_str.c */
+/* erl_errno_str.c */
 
 /* char *erl_errno_id(int eno); */ /* Prototype in erl_driver.h */
 void erts_errno_init(void);

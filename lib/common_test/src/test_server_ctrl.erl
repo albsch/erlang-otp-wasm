@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2002-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2002-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,6 +21,11 @@
 %%
 -module(test_server_ctrl).
 -moduledoc false.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {file, consult, 1}}]).
+
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 %%                                                                  %%
 %%                      The Erlang Test Server                      %%
@@ -2350,15 +2355,15 @@ run_test_cases(TestSpec, Config, TimetrapData) ->
 
 run_test_cases_loop([{SkipTag,CaseData={Type,_Ref,_Case,_Comment}}|Cases],
 		    Config, TimetrapData, Mode, Status) when
-      ((SkipTag==auto_skip_case) or (SkipTag==skip_case)) and
-      ((Type==conf) or (Type==make)) ->
+      SkipTag==auto_skip_case orelse SkipTag==skip_case,
+      Type==conf orelse Type==make ->
     run_test_cases_loop([{SkipTag,CaseData,Mode}|Cases],
 			Config, TimetrapData, Mode, Status);
 
 run_test_cases_loop([{SkipTag,{Type,Ref,Case,Comment},SkipMode}|Cases],
 		    Config, TimetrapData, Mode, Status) when
-      ((SkipTag==auto_skip_case) or (SkipTag==skip_case)) and
-      ((Type==conf) or (Type==make)) ->
+      SkipTag==auto_skip_case orelse SkipTag==skip_case,
+      Type==conf orelse Type==make ->
     ok = file:set_cwd(filename:dirname(get(test_server_dir))),
     CurrIOHandler = get(test_server_common_io_handler),
     ParentMode = tl(Mode),
@@ -2823,7 +2828,7 @@ run_test_cases_loop([{conf,Ref,Props,{Mod,Func}}|_Cases]=Cs0,
 	    stop_minor_log_file(),
 	    run_test_cases_loop(Cases2, Config1, TimetrapData, Mode, Status3);
 
-	{_,{Skip,Reason},_} when StartConf and ((Skip==skip) or (Skip==skipped)) ->
+	{_,{Skip,Reason},_} when StartConf, Skip==skip orelse Skip==skipped ->
 	    ReportAbortRepeat(skipped),
 	    print(minor, "~n*** ~tw skipped.~n"
 		  "    Skipping all cases.", [Func]),
@@ -5776,13 +5781,15 @@ write_html_file(File,Content) ->
 %% The 'major' log file, which is a pure text file is also written
 %% with utf8 encoding
 open_utf8_file(File) ->
-    case file:open(File,AllOpts=[write,{encoding,utf8}]) of
+    AllOpts = [write,{encoding,utf8}],
+    case file:open(File,AllOpts) of
 	{error,Reason} -> {error,{Reason,{File,AllOpts}}};
 	Result         -> Result
     end.
 
 open_utf8_file(File,Opts) ->
-    case file:open(File,AllOpts=[{encoding,utf8}|Opts]) of
+    AllOpts = [{encoding,utf8}|Opts],
+    case file:open(File,AllOpts) of
 	{error,Reason} -> {error,{Reason,{File,AllOpts}}};
 	Result         -> Result
     end.

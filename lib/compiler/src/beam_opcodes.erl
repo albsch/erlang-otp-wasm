@@ -8,7 +8,7 @@
 -spec format_number() -> 0.
 format_number() -> 0.
 
--spec opcode(atom(), 0..8) -> 1..184.
+-spec opcode(atom(), 0..8) -> 1..191.
 opcode(label, 1) -> 1;
 opcode(func_info, 3) -> 2;
 opcode(int_code_end, 0) -> 3;
@@ -139,7 +139,7 @@ opcode(gc_bif2, 6) -> 125;
 %%opcode(put_literal, 2) -> 128;
 opcode(is_bitstr, 2) -> 129;
 %%opcode(bs_context_to_binary, 1) -> 130;
-opcode(bs_test_unit, 3) -> 131;
+%%opcode(bs_test_unit, 3) -> 131;
 opcode(bs_match_string, 4) -> 132;
 opcode(bs_init_writable, 0) -> 133;
 %%opcode(bs_append, 8) -> 134;
@@ -193,9 +193,16 @@ opcode(update_record, 5) -> 181;
 opcode(bs_match, 3) -> 182;
 opcode(executable_line, 2) -> 183;
 opcode(debug_line, 4) -> 184;
+opcode(bif3, 6) -> 185;
+opcode(is_any_native_record, 2) -> 186;
+opcode(is_native_record, 4) -> 187;
+opcode(get_record_elements, 3) -> 188;
+opcode(put_record, 6) -> 189;
+opcode(is_record_accessible, 3) -> 190;
+opcode(get_record_field, 5) -> 191;
 opcode(Name, Arity) -> erlang:error(badarg, [Name,Arity]).
 
--spec opname(1..184) -> {atom(),0..8}.
+-spec opname(1..191) -> {atom(),0..8}.
 opname(1) -> {label,1};
 opname(2) -> {func_info,3};
 opname(3) -> {int_code_end,0};
@@ -380,4 +387,11 @@ opname(181) -> {update_record,5};
 opname(182) -> {bs_match,3};
 opname(183) -> {executable_line,2};
 opname(184) -> {debug_line,4};
+opname(185) -> {bif3,6};
+opname(186) -> {is_any_native_record,2};
+opname(187) -> {is_native_record,4};
+opname(188) -> {get_record_elements,3};
+opname(189) -> {put_record,6};
+opname(190) -> {is_record_accessible,3};
+opname(191) -> {get_record_field,5};
 opname(Number) -> erlang:error(badarg, [Number]).

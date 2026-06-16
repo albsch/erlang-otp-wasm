@@ -71,7 +71,7 @@ APPUP_TARGET= $(EBIN)/$(APPUP_FILE)
 # ----------------------------------------------------
 # FLAGS
 # ----------------------------------------------------
-EXTRA_ERLC_FLAGS = +warn_unused_vars +nowarn_missing_spec_documented
+EXTRA_ERLC_FLAGS = +warn_unused_vars +nowarn_missing_spec_documented +warn_obsolete_bool_op +nowarn_deprecated_catch
 ERL_COMPILE_FLAGS += \
 	-pz $(EBIN) \
 	$(EXTRA_ERLC_FLAGS)
@@ -113,3 +113,8 @@ release_docs_spec:
 info:
 	@echo "APPLICATION       = $(APPLICATION)"
 	@echo "ERL_COMPILE_FLAGS = $(ERL_COMPILE_FLAGS)"
+
+# ----------------------------------------------------
+# Dependencies
+# ----------------------------------------------------
+include $(ERL_TOP)/make/dep.mk

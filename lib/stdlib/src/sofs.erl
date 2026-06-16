@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2001-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -21,8 +21,6 @@
 %%
 -module(sofs).
 -moduledoc({file, "../doc/src/sofs.md"}).
-
--compile(nowarn_deprecated_catch).
 
 -export([from_term/1, from_term/2, from_external/2, empty_set/0,
          is_type/1, set/1, set/2, from_sets/1, relation/1, relation/2,
@@ -845,7 +843,7 @@ Returns a triple of sets:
 1> S1 = sofs:set([a,b,c]).
 2> S2 = sofs:set([c,d,e]).
 3> {S3,S4,S5} = sofs:symmetric_partition(S1, S2).
-4> {sofs:to_external(S3),sofs:to_external(S4),sofs:to_external(S5)}
+4> {sofs:to_external(S3),sofs:to_external(S4),sofs:to_external(S5)}.
 {[a,b],[c],[d,e]}
 ```
 """.
@@ -1152,7 +1150,7 @@ Returns the [union](`m:sofs#union_n`) of the set of sets `SetOfSets`.
 ```erlang
 1> S1 = sofs:set([a,b,c]).
 2> S2 = sofs:set([b,1,2]).
-3> S3 = sofs:set([a,d,e])
+3> S3 = sofs:set([a,d,e]).
 4> S4 = sofs:from_sets([S1,S2,S3]).
 5> S5 = sofs:union(S4).
 6> sofs:to_external(S5).
@@ -1648,7 +1646,7 @@ element E in `Set` that does not belong to the [domain](`m:sofs#domain`) of
 extension(R, S, E) when ?IS_SET(R), ?IS_SET(S) ->
     case {?TYPE(R), ?TYPE(S), is_sofs_set(E)} of
 	{T=?BINREL(DT, RT), ST, true} ->
-	    case match_types(DT, ST) and match_types(RT, type(E)) of
+	    case match_types(DT, ST) andalso match_types(RT, type(E)) of
 		false ->
 		    erlang:error(type_mismatch);
 		true ->
@@ -2377,7 +2375,7 @@ and `Relation2` on coordinates `I` and `J`.
       J :: pos_integer()).
 join(R1, I1, R2, I2)
   when ?IS_SET(R1), ?IS_SET(R2), is_integer(I1), is_integer(I2) ->
-    case test_rel(R1, I1, lte) and test_rel(R2, I2, lte) of
+    case test_rel(R1, I1, lte) andalso test_rel(R2, I2, lte) of
         false -> erlang:error(badarg);
         true when ?TYPE(R1) =:= ?ANYTYPE -> R1;
         true when ?TYPE(R2) =:= ?ANYTYPE -> R2;
@@ -2385,7 +2383,7 @@ join(R1, I1, R2, I2)
 	    L1 = ?LIST(raise_element(R1, I1)),
 	    L2 = ?LIST(raise_element(R2, I2)),
 	    T = relprod1(L1, L2),
-	    F = case (I1 =:= 1) and (I2 =:= 1)  of
+	    F = case I1 =:= 1 andalso I2 =:= 1 of
 		    true ->
 			fun({X,Y}) -> join_element(X, Y) end;
 		    false ->
@@ -2920,13 +2918,14 @@ family_to_digraph(F, Type) when ?IS_SET(F) ->
         _Else  -> erlang:error(badarg)
     end,
     try digraph:new(Type) of
-        G -> case catch fam2digraph(F, G) of
-                 {error, Reason} ->
-                     true = digraph:delete(G),
-                     erlang:error(Reason);
-                 _ ->
-                     G
-             end
+        G ->
+            try
+                fam2digraph(F, G)
+            catch
+                throw:{error, Reason} ->
+                    true = digraph:delete(G),
+                    erlang:error(Reason)
+            end
     catch
         error:badarg -> erlang:error(badarg)
     end.
@@ -3033,7 +3032,7 @@ ordset_of_sets(_, _L, _T) ->
 
 %% Inlined.
 rel(Ts, [Type]) ->
-    case is_type(Type) and atoms_only(Type, 1) of
+    case is_type(Type) andalso atoms_only(Type, 1) of
         true ->
             rel(Ts, tuple_size(Type), Type);
         false ->
@@ -3517,7 +3516,7 @@ relprod_n(RL, R, EmptyR, IsR) ->
         Error = {error, _Reason} ->
             Error;
         DType ->
-            Empty = any(fun is_empty_set/1, RL) or EmptyR,
+            Empty = any(fun is_empty_set/1, RL) orelse EmptyR,
             RType = range_type(RL, []),
             Type = ?BINREL(DType, RType),
             Prod =
@@ -4113,7 +4112,8 @@ setfun(T, Fun, Type, NType) ->
 		NT -> {?LIST(NS), NT}
 	    end;
 	NS when ?IS_ORDSET(NS) ->
-	    case unify_types(NType, NT = ?ORDTYPE(NS)) of
+            NT = ?ORDTYPE(NS),
+	    case unify_types(NType, NT) of
 		[] -> type_mismatch;
 		NT -> {?ORDDATA(NS), NT}
 	    end;
@@ -4207,7 +4207,12 @@ types([S | Ss], L) ->
 %% Inlined.
 unify_types(T, T) -> T;
 unify_types(Type1, Type2) ->
-    catch unify_types1(Type1, Type2).
+    try
+        unify_types1(Type1, Type2)
+    catch
+        throw:Val ->
+            Val
+    end.
 
 unify_types1(Atom, Atom) when ?IS_ATOM_TYPE(Atom) ->
     Atom;

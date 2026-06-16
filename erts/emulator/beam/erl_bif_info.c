@@ -59,6 +59,7 @@
 #include "erl_md5.h"
 #include "erl_iolist.h"
 #include "erl_debugger.h"
+#include "erl_record.h"
 
 #ifdef ERTS_ENABLE_LOCK_COUNT
 #include "erl_lock_count.h"
@@ -3568,11 +3569,9 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
         ERTS_DECL_AM(included);
         ERTS_DECL_AM(excluded);
         ERTS_DECL_AM(asmjit);
-        ERTS_DECL_AM(openssl);
         ERTS_DECL_AM(pcre2);
         ERTS_DECL_AM(ryu);
         ERTS_DECL_AM(STL);
-        ERTS_DECL_AM(tcl);
         ERTS_DECL_AM(zstd);
         ERTS_DECL_AM(zlib);
 
@@ -3596,14 +3595,6 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 #endif
         xtra -= 2;
 
-        hp = erts_produce_heap(&hfact, 2, xtra);
-#ifdef ERTS_USE_BUILTIN_ERRNO_ID
-        included = CONS(hp, AM_tcl, included);
-#else
-        excluded = CONS(hp, AM_tcl, excluded);
-#endif
-        xtra -= 2;
-
         hp = erts_produce_heap(&hfact, 4, xtra);
 #ifdef ERTS_USE_BUILTIN_RYU
         included = CONS(hp, AM_STL, included);
@@ -3616,14 +3607,6 @@ BIF_RETTYPE system_info_1(BIF_ALIST_1)
 
         hp = erts_produce_heap(&hfact, 2, xtra);
         included = CONS(hp, AM_pcre2, included);
-        xtra -= 2;
-
-        hp = erts_produce_heap(&hfact, 2, xtra);
-#ifdef ERTS_USE_BUILTIN_OPENSSL
-        included = CONS(hp, AM_openssl, included);
-#else
-        excluded = CONS(hp, AM_openssl, excluded);
-#endif
         xtra -= 2;
 
         hp = erts_produce_heap(&hfact, 2, xtra);
@@ -4891,6 +4874,12 @@ BIF_RETTYPE erts_debug_get_internal_state_1(BIF_ALIST_1)
                              ? am_true : am_false);
                 BIF_RET(TUPLE3(hp, bin_addr_term, refc_term, test_type));
 	    }
+	    else if (ERTS_IS_ATOM_STR("native_record_def", tp[1])) {
+                ErtsRecordInstance *instance;
+
+                instance = RECORD_INST_P(tp[2]);
+                BIF_RET(instance->record_definition);
+            }
 
 	    break;
 	}

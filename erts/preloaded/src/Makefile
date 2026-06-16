@@ -86,7 +86,7 @@ KERNEL_SRC=$(ERL_TOP)/lib/kernel/src
 KERNEL_INCLUDE=$(ERL_TOP)/lib/kernel/include
 STDLIB_INCLUDE=$(ERL_TOP)/lib/stdlib/include
 
-ERL_COMPILE_FLAGS += -I$(KERNEL_SRC) -I$(KERNEL_INCLUDE)
+ERL_COMPILE_FLAGS += -I$(KERNEL_SRC) -I$(KERNEL_INCLUDE) +nowarn_deprecated_catch
 
 ifeq ($(ERL_DETERMINISTIC),yes)
 	ERL_COMPILE_FLAGS += +deterministic
@@ -173,10 +173,5 @@ dialyzer: $(DIA_PLT)
                   ../ebin \
                   $(DIA_WARNINGS) \
                   --verbose
-
-# Include dependencies -- list below added by PaN
-$(EBIN)/erl_prim_loader.beam: $(KERNEL_SRC)/inet_boot.hrl $(KERNEL_INCLUDE)/file.hrl
-$(EBIN)/prim_file.beam: $(KERNEL_SRC)/file_int.hrl $(KERNEL_INCLUDE)/file.hrl
-$(EBIN)/prim_inet.beam: $(KERNEL_SRC)/inet_int.hrl $(KERNEL_INCLUDE)/inet_sctp.hrl
-$(EBIN)/prim_zip.beam: zip_internal.hrl $(KERNEL_INCLUDE)/file.hrl $(STDLIB_INCLUDE)/zip.hrl
-$(EBIN)/init.beam: $(KERNEL_INCLUDE)/file.hrl
+DEP_REL_TOP=../../../lib/
+include $(ERL_TOP)/make/dep.mk

@@ -359,8 +359,8 @@ utf32_illegal_sequences(Config) when is_list(Config) ->
     utf32_fail_range(16#D800, 16#DFFF),		%Reserved for UTF-16.
     utf32_fail_range(-100, -1),
 
-    <<>> = id(<< 0 || <<X/utf32>> <= <<"àxxx">>, _ = X >>),
-    <<>> = id(<< 0 || <<X/little-utf32>> <= <<"àxxx">>, _ = X >>),
+    <<>> = id(<< 0 || <<X/utf32>> <= <<"àxxx">>, true =:= X >>),
+    <<>> = id(<< 0 || <<X/little-utf32>> <= <<"àxxx">>, true =:= X >>),
 
     ok.
 
@@ -489,7 +489,6 @@ get_data_dir(Config) ->
     Data = proplists:get_value(data_dir, Config),
     Opts = [{return,list}],
     Suffixes = ["_no_opt_SUITE",
-                "_r25_SUITE",
                 "_stripped_types_SUITE"],
     lists:foldl(fun(Suffix, Acc) ->
                         Opts = [{return,list}],

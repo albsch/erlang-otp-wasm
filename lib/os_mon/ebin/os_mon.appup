@@ -19,7 +19,7 @@
 %%
 %% %CopyrightEnd%
 %%
-{"2.11.2",
+{"2.12",
  [{<<".*">>,[{restart_application, os_mon}]}],
  [{<<".*">>,[{restart_application, os_mon}]}]
 }.

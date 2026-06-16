@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"2.3.1",
+{"2.4",
  [{<<".*">>,[{restart_application, runtime_tools}]}],
  [{<<".*">>,[{restart_application, runtime_tools}]}]
 }.

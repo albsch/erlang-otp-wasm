@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2018-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2018-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -404,63 +404,37 @@ bs_restores_is([#b_set{anno=#{ensured := _},
     %% instruction, so there will never be a restore to this
     %% position.
     Start = bs_subst_ctx(NewPos, CtxChain),
-    case Args of
-        [#b_literal{val=skip},_FromPos,_Type,_Flags,#b_literal{val=all},_] ->
+    case is_skip_all(Args) of
+        true ->
             %% This instruction will be optimized away. (The unit test
             %% part of it has been take care of by the preceding
             %% bs_ensure instruction.) All positions will be
             %% unchanged.
             SPos = FPos = SPos0,
             bs_restores_is(Is, CtxChain, SPos, FPos, Rs);
-        [_,FromPos|_] ->
+        false ->
+            [_,FromPos|_] = Args,
             SPos = SPos0#{Start := NewPos},
             FPos = SPos0#{Start := FromPos},
             bs_restores_is(Is, CtxChain, SPos, FPos, Rs)
     end;
-bs_restores_is([#b_set{op=bs_match,dst=NewPos,args=Args}=I|Is],
+bs_restores_is([#b_set{op=bs_match,dst=NewPos,args=Args}|Is],
                CtxChain, SPos0, _FPos, Rs0) ->
+    false = is_skip_all(Args),                  %Assertion.
     Start = bs_subst_ctx(NewPos, CtxChain),
     [_,FromPos|_] = Args,
     case SPos0 of
         #{Start:=FromPos} ->
             %% Same position, no restore needed.
-            SPos = case bs_match_type(I) of
-                       plain ->
-                            %% Update position to new position.
-                            SPos0#{Start:=NewPos};
-                        _ ->
-                            %% Position will not change (test_unit
-                            %% instruction or no instruction at
-                            %% all).
-                            SPos0
-                   end,
+            SPos = SPos0#{Start:=NewPos},
             FPos = SPos0,
             bs_restores_is(Is, CtxChain, SPos, FPos, Rs0);
         #{Start:=_} ->
-            %% Different positions, might need a restore instruction.
-            case bs_match_type(I) of
-                none ->
-                    %% This is a tail test that will be optimized away.
-                    %% There's no need to do a restore, and all
-                    %% positions are unchanged.
-                    FPos = SPos0,
-                    bs_restores_is(Is, CtxChain, SPos0, FPos, Rs0);
-                test_unit ->
-                    %% This match instruction will be replaced by
-                    %% a test_unit instruction. We will need a
-                    %% restore. The new position will be the position
-                    %% restored to (NOT NewPos).
-                    SPos = SPos0#{Start:=FromPos},
-                    FPos = SPos,
-                    Rs = Rs0#{NewPos=>{Start,FromPos}},
-                    bs_restores_is(Is, CtxChain, SPos, FPos, Rs);
-                plain ->
-                    %% Match or skip. Position will be changed.
-                    SPos = SPos0#{Start:=NewPos},
-                    FPos = SPos0#{Start:=FromPos},
-                    Rs = Rs0#{NewPos=>{Start,FromPos}},
-                    bs_restores_is(Is, CtxChain, SPos, FPos, Rs)
-            end
+            %% Match or skip. Position will be changed.
+            SPos = SPos0#{Start := NewPos},
+            FPos = SPos0#{Start := FromPos},
+            Rs = Rs0#{NewPos => {Start,FromPos}},
+            bs_restores_is(Is, CtxChain, SPos, FPos, Rs)
     end;
 bs_restores_is([#b_set{op=bs_extract,args=[FromPos|_]}|Is],
                CtxChain, SPos, _FPos, Rs) ->
@@ -511,15 +485,8 @@ bs_restores_is([], _CtxChain, SPos, _FPos, Rs) ->
     FPos = SPos,
     {SPos, FPos, Rs}.
 
-bs_match_type(#b_set{args=[#b_literal{val=skip},_Ctx,
-                             #b_literal{val=binary},_Flags,
-                             #b_literal{val=all},#b_literal{val=U}]}) ->
-    case U of
-        1 -> none;
-        _ -> test_unit
-    end;
-bs_match_type(_) ->
-    plain.
+is_skip_all([#b_literal{val=skip},_,_,_,#b_literal{val=all},_]) -> true;
+is_skip_all(_) -> false.
 
 %% Call instructions leave the match position in an undefined state,
 %% requiring us to invalidate each affected argument.
@@ -1181,12 +1148,14 @@ find_fc_errors([#b_function{bs=Blocks}|Fs], Acc0) ->
 find_fc_errors([], Acc) ->
     Acc.
 
-%%% expand_update_tuple(St0) -> St
-%%%
-%%%   Expands the update_tuple psuedo-instruction into its actual instructions.
-%%%
+%%% Expands the `update_tuple` pseudo-instruction into `setelement/3`
+%%% calls. Provided that the ssa_opt_deoptimize_update_tuple sub-pass
+%%% in beam_ssa_opt has completely broken apart all `update_tuple`
+%%% instructions, this should result in the same number of
+%%% `setelement/3`calls as in the original source code.
+
 expand_update_tuple(#st{ssa=Blocks0,cnt=Count0}=St) ->
-    Linear0 = beam_ssa:linearize(Blocks0),
+    Linear0 = beam_ssa:linearize_only(Blocks0),
     {Linear, Count} = expand_update_tuple_1(Linear0, Count0, []),
     Blocks = maps:from_list(Linear),
     St#st{ssa=Blocks,cnt=Count}.
@@ -1196,9 +1165,9 @@ expand_update_tuple_1([{L, #b_blk{is=Is0}=B0} | Bs], Count0, Acc0) ->
         {Is, Count} ->
             expand_update_tuple_1(Bs, Count, [{L, B0#b_blk{is=Is}} | Acc0]);
         {Is, NextIs, Count1} ->
-            %% There are `set_tuple_element` instructions that we must put into
-            %% a new block to avoid separating the `setelement` instruction from
-            %% its `succeeded` instruction.
+            %% There are `setelement/3` calls that we must put into a
+            %% new block to avoid separating the first `setelement/3`
+            %% instruction from its `succeeded` instruction.
             #b_blk{last=Br} = B0,
             #b_br{succ=Succ} = Br,
             NextL = Count1,
@@ -1210,14 +1179,14 @@ expand_update_tuple_1([{L, #b_blk{is=Is0}=B0} | Bs], Count0, Acc0) ->
             expand_update_tuple_1(Bs, Count, Acc)
     end;
 expand_update_tuple_1([], Count, Acc) ->
-    {Acc, Count}.
+    {reverse(Acc), Count}.
 
 expand_update_tuple_is([#b_set{op=update_tuple, args=[Src | Args]}=I0 | Is],
-                        Count0, Acc) ->
+                       Count0, Acc) ->
     {SetElement, Sets, Count} = expand_update_tuple_list(Args, I0, Src, Count0),
     case {Sets, Is} of
-        {[_ | _], [#b_set{op=succeeded}]} ->
-            {reverse(Acc, [SetElement | Is]), reverse(Sets), Count};
+        {[_ | _], [#b_set{op=succeeded}=I]} ->
+            {reverse(Acc, [SetElement, I]), reverse(Sets), Count};
         {_, _} ->
             expand_update_tuple_is(Is, Count, Sets ++ [SetElement | Acc])
     end;
@@ -1226,36 +1195,32 @@ expand_update_tuple_is([I | Is], Count, Acc) ->
 expand_update_tuple_is([], Count, Acc) ->
     {reverse(Acc), Count}.
 
-%% Expands an update_tuple list into setelement/3 + set_tuple_element.
+%% Expands an update_tuple list into a chain of `setelement/3` instructions.
 %%
 %% Note that it returns the instructions in reverse order.
 expand_update_tuple_list(Args, I0, Src, Count0) ->
-    [Index, Value | Rest] = sort_update_tuple(Args, []),
+    SortedUpdates = sort_update_tuple(Args, []),
+    expand_update_tuple_list_1(SortedUpdates, Src, I0, Count0, []).
 
-    %% set_tuple_element is destructive, so we have to start off with a
-    %% setelement/3 call to give them something to work on.
-    I = I0#b_set{op=call,
-                 args=[#b_remote{mod=#b_literal{val=erlang},
-                       name=#b_literal{val=setelement},
-                       arity=3},
-                 Index, Src, Value]},
-    {Sets, Count} = expand_update_tuple_list_1(Rest, I#b_set.dst, Count0, []),
-    {I, Sets, Count}.
-
-expand_update_tuple_list_1([], _Src, Count, Acc) ->
-    {Acc, Count};
-expand_update_tuple_list_1([Index0, Value | Updates], Src, Count0, Acc) ->
-    %% Change to the 0-based indexing used by `set_tuple_element`.
-    Index = #b_literal{val=(Index0#b_literal.val - 1)},
+expand_update_tuple_list_1([Index, Value | Updates], Src, I0, Count0, Acc) ->
     {Dst, Count} = new_var(Count0),
-    SetOp = #b_set{op=set_tuple_element,
-                   dst=Dst,
-                   args=[Value, Src, Index]},
-    expand_update_tuple_list_1(Updates, Src, Count, [SetOp | Acc]).
+    I = I0#b_set{op=call,
+                  dst=Dst,
+                  args=[#b_remote{mod=#b_literal{val=erlang},
+                                  name=#b_literal{val=setelement},
+                                  arity=3},
+                        Index, Src, Value]},
+    expand_update_tuple_list_1(Updates, Dst, I0, Count, [I | Acc]);
+expand_update_tuple_list_1([], _Src, #b_set{dst=Dst}, Count, [I0|Acc]) ->
+    I1 = I0#b_set{dst=Dst},
+    Is0 = [I1|Acc],
+    I = last(Is0),
+    Is = lists:droplast(Is0),
+    {I, Is, Count}.
 
-%% Sorts updates so that the highest index comes first, letting us use
-%% set_tuple_element for all subsequent operations as we know their indexes
-%% will be valid.
+%% Sorts updates so that the highest index comes first letting us use
+%% `setelement/3` calls not followed by `succeeded` for all
+%% subsequent operations as we know that their indices will be valid.
 sort_update_tuple([_Index, _Value]=Args, []) ->
     Args;
 sort_update_tuple([#b_literal{}=Index, Value | Updates], Acc) ->
@@ -2906,18 +2871,33 @@ reserve_zreg([#b_set{op={bif,tuple_size},dst=Dst},
 reserve_zreg([#b_set{op={bif,tuple_size},dst=Dst}],
              #b_switch{arg=Dst}, ShortLived, A) ->
     reserve_test_zreg(Dst, ShortLived, A);
-reserve_zreg([#b_set{op=Op,dst=Dst}], #b_br{bool=Dst}, ShortLived, A) ->
-    case use_zreg(Op) of
+reserve_zreg([#b_set{op=Op,dst=Dst,args=Args}],
+             #b_br{bool=Dst}, ShortLived, A) ->
+    case use_zreg(Op, Args) of
         yes -> [{Dst,z} | A];
         no -> A;
         'maybe' -> reserve_test_zreg(Dst, ShortLived, A)
     end;
-reserve_zreg([#b_set{op=Op,dst=Dst} | Is], Last, ShortLived, A) ->
-    case use_zreg(Op) of
+reserve_zreg([#b_set{op=Op,dst=Dst,args=Args} | Is], Last, ShortLived, A) ->
+    case use_zreg(Op, Args) of
         yes -> reserve_zreg(Is, Last, ShortLived, [{Dst,z} | A]);
         _Other -> reserve_zreg(Is, Last, ShortLived, A)
     end;
 reserve_zreg([], _, _, A) -> A.
+
+use_zreg({bif,is_integer}, [_,_,_]) -> no;
+use_zreg({bif,is_record}, Args) ->
+    case Args of
+        [_] ->
+            'maybe';
+        [_,#b_literal{val=Mod},#b_literal{val=Name}]
+          when is_atom(Mod), is_atom(Name) ->
+            'maybe';
+        _ ->
+            no
+    end;
+use_zreg(Op, _Args) ->
+    use_zreg(Op).
 
 use_zreg(bs_ensured_match_string) -> yes;
 use_zreg(bs_ensured_skip) -> yes;
@@ -2933,7 +2913,6 @@ use_zreg(recv_marker_bind) -> yes;
 use_zreg(recv_marker_clear) -> yes;
 use_zreg(remove_message) -> yes;
 use_zreg(require_stack) -> yes;
-use_zreg(set_tuple_element) -> yes;
 use_zreg(succeeded) -> yes;
 use_zreg(wait_timeout) -> yes;
 %% There's no way we can combine these into a test instruction, so we must
@@ -2941,7 +2920,6 @@ use_zreg(wait_timeout) -> yes;
 use_zreg(call) -> no;
 use_zreg({bif,element}) -> no;
 use_zreg({bif,is_map_key}) -> no;
-use_zreg({bif,is_record}) -> no;
 use_zreg({bif,map_get}) -> no;
 use_zreg({bif,'xor'}) -> no;
 use_zreg(get_hd) -> no;

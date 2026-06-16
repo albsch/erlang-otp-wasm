@@ -7,7 +7,7 @@
 %% %CopyrightEnd%
 {application, tftp,
  [{description, "TFTP application"},
-  {vsn, "1.2.4"},
+  {vsn, "1.3"},
   {registered, []},
   {mod, { tftp_app, []}},
   {applications,

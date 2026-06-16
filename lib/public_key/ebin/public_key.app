@@ -2,12 +2,12 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% %CopyrightEnd%
 {application, public_key,
   [{description, "Public key infrastructure"},
-   {vsn, "1.20.3"},
+   {vsn, "1.21.2"},
    {modules, [
               'AlgorithmInformation-2009',
               'AttributeCertificateVersion1-2009',
@@ -20,6 +20,7 @@
               'KEMAlgorithmInformation-2023',
               'OCSP-2024-08',
               'OTP-PKIX',
+              'OTP-PKIX-Relaxed',
               'PKCS-1',
               'PKCS-10',
               'PKCS-3',
@@ -38,6 +39,7 @@
               'Safecurves-pkix-18',
               'SecureMimeMessageV3dot1-2009',
               'X509-ML-DSA-2025',
+              'X509-ML-KEM-2025',
               pubkey_cert,
               pubkey_cert_records,
               pubkey_crl,

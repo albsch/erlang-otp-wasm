@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2000-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2000-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -147,7 +147,10 @@ providing one key for module `t` and another key for all other modules:
 """.
 -behaviour(gen_server).
 
--compile(nowarn_deprecated_catch).
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {erlang, binary_to_atom, 2}},
+          {nowarn_possibly_unsafe_function, {erlang, binary_to_term, 1}},
+          nowarn_deprecated_catch]).
 
 -include_lib("kernel/include/eep48.hrl").
 
@@ -1380,7 +1383,8 @@ significant_chunks() ->
 %% for a module. They are listed in the order that they should be MD5:ed.
 
 md5_chunks() ->
-    ["Atom", "AtU8", "Code", "StrT", "ImpT", "ExpT", "FunT", "LitT", "Meta"].
+    ["Atom", "AtU8", "Code", "StrT", "ImpT", "ExpT",
+     "FunT", "LitT", "Meta", "Recs", "DbgB"].
 
 %% The following chunks are mandatory in every Beam file.
 
@@ -1414,13 +1418,6 @@ decrypt_chunk(Type, Module, File, Id, Bin) ->
 
 old_anno_from_term({raw_abstract_v1, Forms}) ->
     {raw_abstract_v1, anno_from_forms(Forms)};
-old_anno_from_term({Tag, Forms}) when Tag =:= abstract_v1;
-                                      Tag =:= abstract_v2 ->
-    try {Tag, anno_from_forms(Forms)}
-    catch
-        _:_ ->
-            {Tag, Forms}
-    end;
 old_anno_from_term(T) ->
     T.
 

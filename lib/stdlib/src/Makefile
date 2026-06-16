@@ -3,7 +3,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 #
-# Copyright Ericsson AB 1996-2025. All Rights Reserved.
+# Copyright Ericsson AB 1996-2026. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -56,6 +56,7 @@ MODULES= \
 	dets_utils \
 	dets_v9 \
 	dict \
+	graph \
 	digraph \
 	digraph_utils \
 	edlin \
@@ -96,6 +97,7 @@ MODULES= \
 	gen_server \
 	gen_statem \
 	io \
+	io_ansi \
 	io_lib \
 	io_lib_format \
 	io_lib_fread \
@@ -111,6 +113,7 @@ MODULES= \
 	orddict \
 	ordsets \
 	re \
+	records \
 	peer \
 	pool \
 	proc_lib \
@@ -125,7 +128,6 @@ MODULES= \
 	shell_default \
 	shell_docs \
 	shell_docs_markdown \
-	shell_docs_test \
 	slave \
 	sofs \
 	string \
@@ -148,7 +150,7 @@ HRL_FILES= \
 	../include/qlc.hrl \
 	../include/zip.hrl
 
-INTERNAL_HRL_FILES= dets.hrl erl_tar.hrl otp_internal.hrl json.hrl
+INTERNAL_HRL_FILES= dets.hrl erl_tar.hrl otp_internal.hrl json.hrl swar_ascii.hrl
 
 ERL_FILES= $(MODULES:%=%.erl)
 
@@ -176,11 +178,12 @@ endif
 # FLAGS
 # ----------------------------------------------------
 
-ERL_COMPILE_FLAGS += -Werror  +warn_deprecated_catch
+ERL_COMPILE_FLAGS += -Werror  +warn_deprecated_catch +warn_obsolete_bool_op
 ERL_COMPILE_FLAGS += -I../include -I../../kernel/include
 
 ifeq ($(ERL_DETERMINISTIC),yes)
 	DETERMINISM_FLAG = +deterministic
+	DEP_SKIP_FILES = erl_parse.erl
 else
 	DETERMINISM_FLAG =
 endif
@@ -208,6 +211,7 @@ primary_bootstrap_compiler: \
   $(BOOTSTRAP_COMPILER)/ebin/erl_scan.beam \
   $(BOOTSTRAP_COMPILER)/ebin/erl_parse.beam \
   $(BOOTSTRAP_COMPILER)/ebin/erl_lint.beam \
+  $(BOOTSTRAP_COMPILER)/ebin/graph.beam \
   $(BOOTSTRAP_COMPILER)/ebin/io.beam \
   $(BOOTSTRAP_COMPILER)/ebin/otp_internal.beam \
   $(BOOTSTRAP_COMPILER)/ebin/erl_internal.beam
@@ -258,34 +262,6 @@ release_spec: opt
 release_docs_spec:
 
 # ----------------------------------------------------
-# Dependencies -- alphabetically, please
+# Dependencies
 # ----------------------------------------------------
-
-$(EBIN)/beam_lib.beam: ../include/erl_compile.hrl ../../kernel/include/file.hrl
-$(EBIN)/dets.beam: dets.hrl ../../kernel/include/file.hrl
-$(EBIN)/dets_server.beam: dets.hrl
-$(EBIN)/dets_utils.beam: dets.hrl
-$(EBIN)/dets_v9.beam: dets.hrl
-$(EBIN)/erl_bits.beam: ../include/erl_bits.hrl
-$(EBIN)/erl_compile.beam: ../include/erl_compile.hrl ../../kernel/include/file.hrl
-$(EBIN)/erl_lint.beam: ../include/erl_bits.hrl
-$(EBIN)/erl_tar.beam: ../../kernel/include/file.hrl erl_tar.hrl
-$(EBIN)/file_sorter.beam: ../../kernel/include/file.hrl
-$(EBIN)/filelib.beam: ../../kernel/include/file.hrl
-$(EBIN)/filename.beam: ../../kernel/include/file.hrl
-$(EBIN)/gen_event.beam: ../../kernel/include/logger.hrl
-$(EBIN)/gen_fsm.beam: ../../kernel/include/logger.hrl
-$(EBIN)/gen_server.beam: ../../kernel/include/logger.hrl
-$(EBIN)/gen_statem.beam: ../../kernel/include/logger.hrl
-$(EBIN)/json.beam: json.hrl
-$(EBIN)/ms_transform.beam: ../doc/src/ms_transform.md
-$(EBIN)/peer.beam: ../doc/src/peer.md
-$(EBIN)/proc_lib.beam: ../../kernel/include/logger.hrl
-$(EBIN)/qlc.beam: ../doc/src/qlc.md
-$(EBIN)/qlc_pt.beam: ../include/ms_transform.hrl
-$(EBIN)/re.beam: ../doc/src/re.md
-$(EBIN)/shell.beam: ../../kernel/include/file.hrl ../doc/src/shell.md
-$(EBIN)/sofs.beam: ../doc/src/sofs.md
-$(EBIN)/supervisor.beam: ../../kernel/include/logger.hrl
-$(EBIN)/supervisor_bridge.beam: ../../kernel/include/logger.hrl
-$(EBIN)/zip.beam: ../include/zip.hrl ../../kernel/include/file.hrl
+include $(ERL_TOP)/make/dep.mk

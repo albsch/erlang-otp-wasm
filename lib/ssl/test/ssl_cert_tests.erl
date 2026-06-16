@@ -646,10 +646,10 @@ client_auth_sni(Config) when is_list(Config) ->
     ServerOpts = [{cacerts, [IntermidiateCA]} |
                   proplists:delete(cacertfile, ServerOpts0)],
     %% Basic test if hostname check is not performed the connection will succeed
-    ssl_test_lib:basic_alert(ClientOpts, ServerOpts0, Config, handshake_failure),
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts0, Config, bad_certificate),
     %% Also test that user verify_fun is run.
     %% If user verify fun is not used the ALERT will be unknown_ca
-    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, handshake_failure).
+    ssl_test_lib:basic_alert(ClientOpts, ServerOpts, Config, bad_certificate).
 
 %%--------------------------------------------------------------------
 client_auth_seelfsigned_peer() ->
@@ -1073,7 +1073,7 @@ supported_groups(Group) ->
 
 
 choose_custom_key(#'RSAPrivateKey'{} = Key, Version)
-  when (Version == 'dtlsv1') or (Version == 'tlsv1') or (Version == 'tlsv1.1') ->
+  when Version == 'dtlsv1' orelse Version == 'tlsv1' orelse Version == 'tlsv1.1' ->
     EFun = fun (PlainText, Options) ->
                    public_key:encrypt_private(PlainText, Key, Options)
           end,

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2001-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2001-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -22,6 +22,10 @@
 %% Purpose: Test suite for the ASN.1 application
 
 -module(asn1_SUITE).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_possibly_unsafe_function, {file, consult, 1}},
+          nowarn_deprecated_catch]).
 
 %% Suppress compilation of an addititional module compiled for maps.
 -define(NO_MAPS_MODULE, asn1_test_lib_no_maps).

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1998-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1998-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -39,7 +39,7 @@
 -type index() :: non_neg_integer().
 
 -type frame_size() :: 'none' | 'entry' | non_neg_integer().
--type debug_info() :: {frame_size(), list()}.
+-type debug_info() :: #{frame_size := frame_size(), vars := list(), calls := list()}.
 
 -type atom_tab()   :: #{atom() => index()}.
 -type import_tab() :: gb_trees:tree(mfa(), index()).
@@ -222,7 +222,7 @@ line([{location,Name,Line}|_], #asm{lines=Lines,num_lines=N,
   when is_atom(Instr) ->
     {FnameIndex,Dict1} = fname(Name, Dict0),
     Key = {FnameIndex,Line},
-    ExecLine = ExecLine0 or (Instr =:= executable_line),
+    ExecLine = ExecLine0 orelse Instr =:= executable_line,
     case Lines of
         #{Key := Index} ->
             {Index,Dict1#asm{num_lines=N+1,exec_line=ExecLine}};

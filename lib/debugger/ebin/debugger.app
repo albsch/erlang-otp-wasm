@@ -21,7 +21,7 @@
 %%
 {application, debugger,
  [{description, "Debugger"},
-  {vsn, "6.0.3"},
+  {vsn, "7.0"},
   {modules, [
 	     dbg_debugged,
 	     dbg_icmd,

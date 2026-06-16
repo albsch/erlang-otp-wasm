@@ -275,6 +275,7 @@ set_match_trace(Process *tracee_p, Eterm fail_term, ErtsTracer tracer,
 typedef enum {
     matchArray, /* Only when parameter is an array (DCOMP_TRACE) */
     matchArrayBind, /* ------------- " ------------ */
+    matchArrayPrefix, /* Prefix match: arity >= n (DCOMP_TRACE) */
     matchTuple,
     matchPushT,
     matchPushL,
@@ -586,6 +587,12 @@ static DMCGuardBif guard_tab[] =
 	am_is_integer,
 	&is_integer_1,
 	1,
+	DBIF_ALL
+    },
+    {
+	am_is_integer,
+	&is_integer_3,
+	3,
 	DBIF_ALL
     },
     {
@@ -1217,6 +1224,8 @@ Binary *db_match_set_compile(Process *p, Eterm matchexpr,
     Eterm *matches,*guards, *bodies;
     Eterm *buff;
     Eterm sbuff[15];
+    bool *prefix_flags = NULL;
+    bool sprefix[5] = {0};
 
     *freasonp = BADARG;
 
@@ -1232,8 +1241,11 @@ Binary *db_match_set_compile(Process *p, Eterm matchexpr,
     if (num_heads > 5) {
 	buff = erts_alloc(ERTS_ALC_T_DB_TMP,
 			  sizeof(Eterm) * num_heads * 3);
+	prefix_flags = erts_alloc(ERTS_ALC_T_DB_TMP,
+				  sizeof(bool) * num_heads);
     } else {
 	buff = sbuff;
+	prefix_flags = sprefix;
     }
 
     matches = buff;
@@ -1246,6 +1258,7 @@ Binary *db_match_set_compile(Process *p, Eterm matchexpr,
 	if (!is_tuple(t) || (tp = tuple_val(t))[0] != make_arityval(3)) {
 	    goto error;
 	}
+	prefix_flags[i] = false;
 	if (!(flags & DCOMP_TRACE) || (!is_list(tp[1]) && 
 					!is_nil(tp[1]))) {
 	    t = tp[1];
@@ -1258,7 +1271,9 @@ Binary *db_match_set_compile(Process *p, Eterm matchexpr,
 	    for (l2 = tp[1]; is_list(l2); l2 = CDR(list_val(l2))) {
 		++n;
 	    }
-	    if (l2 != NIL) {
+	    if (l2 == am_Underscore) {
+		prefix_flags[i] = true;
+	    } else if (l2 != NIL) {
 		goto error;
 	    }
             if (n == 0) {
@@ -1283,12 +1298,16 @@ Binary *db_match_set_compile(Process *p, Eterm matchexpr,
 				num_heads,
 				flags,
 				NULL,
-                                freasonp)) == NULL) {
+                                freasonp,
+                                prefix_flags)) == NULL) {
 	goto error;
     }
     compiled = 1;
     if (buff != sbuff) {
 	erts_free(ERTS_ALC_T_DB_TMP, buff);
+    }
+    if (prefix_flags != sprefix) {
+	erts_free(ERTS_ALC_T_DB_TMP, prefix_flags);
     }
     return mps;
 
@@ -1298,6 +1317,9 @@ error:
     }
     if (buff != sbuff) {
 	erts_free(ERTS_ALC_T_DB_TMP, buff);
+    }
+    if (prefix_flags != sprefix) {
+	erts_free(ERTS_ALC_T_DB_TMP, prefix_flags);
     }
     return NULL;
 }
@@ -1499,6 +1521,8 @@ static Eterm db_match_set_lint(Process *p, Eterm matchexpr, Uint flags)
     Eterm *matches,*guards, *bodies;
     Eterm sbuff[15];
     Eterm *buff = sbuff;
+    bool *prefix_flags = NULL;
+    bool sprefix[5] = {0};
     int i;
     Uint freason = BADARG;
 
@@ -1520,7 +1544,11 @@ static Eterm db_match_set_lint(Process *p, Eterm matchexpr, Uint flags)
     if (num_heads > 5) {
 	buff = erts_alloc(ERTS_ALC_T_DB_TMP,
 			  sizeof(Eterm) * num_heads * 3);
-    } 
+	prefix_flags = erts_alloc(ERTS_ALC_T_DB_TMP,
+				  sizeof(bool) * num_heads);
+    } else {
+	prefix_flags = sprefix;
+    }
 
     matches = buff;
     guards = buff + num_heads;
@@ -1536,6 +1564,7 @@ static Eterm db_match_set_lint(Process *p, Eterm matchexpr, Uint flags)
 			-1, 0UL, dmcError);
 	    goto done;
 	}
+	prefix_flags[i] = false;
 	if (!(flags & DCOMP_TRACE) || (!is_list(tp[1]) && 
 					!is_nil(tp[1]))) {
 	    t = tp[1];
@@ -1544,7 +1573,9 @@ static Eterm db_match_set_lint(Process *p, Eterm matchexpr, Uint flags)
 	    for (l2 = tp[1]; is_list(l2); l2 = CDR(list_val(l2))) {
 		++n;
 	    }
-	    if (l2 != NIL) {
+	    if (l2 == am_Underscore) {
+		prefix_flags[i] = true;
+	    } else if (l2 != NIL) {
 		add_dmc_err(err_info, 
 			    "Match expression part %T is not a "
 			    "proper list.", 
@@ -1571,7 +1602,7 @@ static Eterm db_match_set_lint(Process *p, Eterm matchexpr, Uint flags)
 	++i;
     }
     mp = db_match_compile(matches, guards, bodies, num_heads,
-			  flags, err_info, &freason); 
+			  flags, err_info, &freason, prefix_flags);
     if (mp != NULL) {
 	erts_bin_free(mp);
     }
@@ -1580,6 +1611,9 @@ done:
     db_free_dmc_err_info(err_info);
     if (buff != sbuff) {
 	erts_free(ERTS_ALC_T_DB_TMP, buff);
+    }
+    if (prefix_flags != sprefix) {
+	erts_free(ERTS_ALC_T_DB_TMP, prefix_flags);
     }
     return ret;
 }
@@ -1686,7 +1720,8 @@ Binary *db_match_compile(Eterm *matchexpr,
 			 int num_progs,
 			 Uint flags, 
 			 DMCErrInfo *err_info,
-                         Uint *freasonp)
+                         Uint *freasonp,
+                         const bool *is_prefix)
 {
     DMCHeap heap;
     DMC_STACK_TYPE(Eterm) stack;
@@ -1953,7 +1988,11 @@ restart:
 		    }
 		    goto error;
 		}
-		DMC_POKE(text, clause_start, matchArray);
+		if (is_prefix && is_prefix[context.current_match]) {
+		    DMC_POKE(text, clause_start, matchArrayPrefix);
+		} else {
+		    DMC_POKE(text, clause_start, matchArray);
+		}
 	    }
 	}
 
@@ -2050,7 +2089,7 @@ restart:
 #endif
 
     /* 
-     * Fall through to cleanup code, but context.save should not be free'd
+     * Continue to cleanup code, but context.save should not be free'd
      */  
     context.save = NULL;
 error: /* Here is were we land when compilation failed. */
@@ -2248,6 +2287,12 @@ restart:
 			    instruction. */
 	    n = *pc++;
 	    if ((int) n != arity)
+		FAIL();
+	    ep = termp;
+	    break;
+	case matchArrayPrefix: /* only when DCOMP_TRACE, prefix match */
+	    n = *pc++;
+	    if ((int) n > arity)
 		FAIL();
 	    ep = termp;
 	    break;
@@ -3395,9 +3440,8 @@ static Uint db_size_dbterm_comp(int keypos, Eterm obj)
 {
     Eterm* tpl = tuple_val(obj);
     int i;
-    Uint size = sizeof(DbTerm)
-	+ arityval(*tpl) * sizeof(Eterm)
-        + sizeof(Uint); /* "alloc_size" */
+    Uint size = (ERTS_SIZEOF_DBTERM(1 + arityval(*tpl))
+                 + sizeof(Uint)); /* "alloc_size" */
 
     for (i = arityval(*tpl); i>0; i--) {
 	if (i != keypos && is_not_immed(tpl[i])) {
@@ -3543,8 +3587,8 @@ void* db_store_term(DbTableCommon *tb, DbTerm* old, Uint offset, Eterm obj)
 	    newp = old;
 	}
 	else {
-	    Uint new_sz = offset + sizeof(DbTerm) + sizeof(Eterm)*(size-1);
-	    Uint old_sz = offset + sizeof(DbTerm) + sizeof(Eterm)*(old->size-1);
+	    Uint new_sz = offset + ERTS_SIZEOF_DBTERM(size);
+	    Uint old_sz = offset + ERTS_SIZEOF_DBTERM(old->size);
 
 	    basep = db_realloc_term(tb, basep, old_sz, new_sz, offset);
 	    newp = (DbTerm*) (basep + offset);
@@ -3552,7 +3596,7 @@ void* db_store_term(DbTableCommon *tb, DbTerm* old, Uint offset, Eterm obj)
     }
     else {
 	basep = erts_db_alloc(ERTS_ALC_T_DB_TERM, (DbTable *)tb,
-			      (offset + sizeof(DbTerm) + sizeof(Eterm)*(size-1)));
+			      (offset + ERTS_SIZEOF_DBTERM(size)));
 	newp = (DbTerm*) (basep + offset);
     }
 
@@ -3626,7 +3670,7 @@ void db_finalize_resize(DbUpdateHandle* handle, Uint offset)
     Uint alloc_sz = offset +
 	(tbl->common.compress ?
 	 db_size_dbterm_comp(tbl->common.keypos, make_tuple(handle->dbterm->tpl)) :
-	 sizeof(DbTerm)+sizeof(Eterm)*(handle->new_size-1));
+	 ERTS_SIZEOF_DBTERM(handle->new_size));
     byte* newp = erts_db_alloc(ERTS_ALC_T_DB_TERM, tbl, alloc_sz);
     byte* oldp = *(handle->bp);
 
@@ -5606,8 +5650,8 @@ static DMCRet dmc_expr(DMCContext *context,
 		!= retOk)
 		return ret;
 	    break;
-	}	    
-	/* Fall through */
+	}
+        ERTS_FALLTHROUGH();
     default:
     simple_term:
 	*constant = true;
@@ -5861,7 +5905,7 @@ static Uint my_size_object(Eterm t, bool is_hashmap_node)
             }
             break;
         }
-        /* fall through */
+        ERTS_FALLTHROUGH();
     default:
 	sum += size_object(t);
 	break;
@@ -6128,8 +6172,7 @@ static Eterm seq_trace_fake(Process *p, Eterm arg1)
 DbTerm* db_alloc_tmp_uncompressed(DbTableCommon* tb, DbTerm* org)
 {
     ErlOffHeap tmp_offheap;
-    DbTerm* res = erts_alloc(ERTS_ALC_T_TMP,
-			     sizeof(DbTerm) + org->size*sizeof(Eterm));
+    DbTerm* res = erts_alloc(ERTS_ALC_T_TMP, ERTS_SIZEOF_DBTERM(org->size));
     Eterm* hp = res->tpl;
     tmp_offheap.first = NULL;
     db_copy_from_comp(tb, org, &hp, &tmp_offheap);
@@ -6206,6 +6249,12 @@ void db_match_dis(Binary *bp)
 	    n = *t;
 	    ++t;
 	    erts_printf("Array\t%beu\n", n);
+	    break;
+	case matchArrayPrefix:
+	    ++t;
+	    n = *t;
+	    ++t;
+	    erts_printf("ArrayPrefix\t%beu\n", n);
 	    break;
 	case matchArrayBind:
 	    ++t;

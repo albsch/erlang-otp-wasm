@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0 OR LGPL-2.1-or-later
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -32,6 +32,8 @@
 %% @doc EDoc interface to Erlang specifications and types.
 
 -module(edoc_specs).
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}}]).
 
 -export([type/2, spec/1, dummy_spec/1, docs/2]).
 
@@ -510,7 +512,8 @@ expand_records(Entries, TypeDefs, DT, Opts, File, Module) ->
                         {export_type,Ts} <- Module#module.attributes,
                         is_list(Ts),
                         {N,I} <- Ts,
-                        ets:member(DT, Name = {#t_name{name = N}, I})],
+                        Name <- [{#t_name{name = N}, I}],
+                        ets:member(DT, Name)],
     _ = lists:foreach(fun({N,A}) -> true = seen_type(N, A, P)
                       end, ExportedTypes),
     entries(Entries, P, Opts).

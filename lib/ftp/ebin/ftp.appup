@@ -18,7 +18,7 @@
 %% limitations under the License.
 %%
 %% %CopyrightEnd%
-{"1.2.4",
+{"1.2.6",
  [
   {<<".*">>,[{restart_application, ftp}]}
  ],

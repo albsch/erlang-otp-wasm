@@ -3,7 +3,7 @@
  *
  * SPDX-License-Identifier: Apache-2.0
  *
- * Copyright Ericsson AB 2006-2025. All Rights Reserved.
+ * Copyright Ericsson AB 2006-2026. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -1133,6 +1133,10 @@ get_cgroup_path(const char *controller,
     if (mount_file == NULL) {
         return ERTS_CGROUP_NONE;
     }
+
+#ifndef VALGRIND
+    child_path = NULL; // ERTS_UNDEF
+#endif
 
     version = get_cgroup_child_path(controller, &child_path);
 

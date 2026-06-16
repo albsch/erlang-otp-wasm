@@ -314,13 +314,15 @@ DTLS protocol version.
 
 -doc(#{group => <<"Socket">>}).
 -doc """
-A TLS protocol version that are no longer supported by default for security reasons.
+A TLS protocol version that are no longer supported by default for security reasons
+and scheduled for removal in OTP 30.
 """.
 -type tls_legacy_version()       ::  tlsv1 | 'tlsv1.1' .
 
 -doc(#{group => <<"Socket">>}).
 -doc """
-A DTLS protocol version that are no longer supported by default for security reasons.
+A DTLS protocol version that are no longer supported by default for security reasons
+and scheduled for removal in OTP 30.
 """.
 -type dtls_legacy_version()      :: 'dtlsv1'.
 
@@ -556,11 +558,20 @@ These curves have been deprecated by RFC 8422.
 -doc """
 TLS-1.3 key exchange configuration.
 """.
--type group()                  :: x25519
+-type group()                  :: x25519mlkem768
+                                | secp384r1mlkem1024
+                                | secp256r1mlkem768
+                                | mlkem1024
+                                | mlkem768
+                                | mlkem512
+                                | x25519
                                 | x448
                                 | secp256r1
                                 | secp384r1
                                 | secp521r1
+                                | brainpoolP512r1tls13
+                                | brainpoolP384r1tls13
+                                | brainpoolP256r1tls13
                                 | ffdhe2048
                                 | ffdhe3072
                                 | ffdhe4096
@@ -693,8 +704,7 @@ Options common to both client and server side.
   Used to limit the size of valid TLS handshake packets to avoid DoS
   attacks.
 
-  Integer (24 bits, unsigned). Defaults to `256*1024` before OTP-26 or if SLH-DSA algorithms
-  are configured, otherwise the default is `256*1024`/2.
+  Integer (24 bits, unsigned). Defaults to `262144` since OTP 29.0
 
 - **`{hibernate_after, HibernateTimeout}`** - Hibernate inactive connection processes.
 
@@ -751,7 +761,7 @@ Common certificate related options to both client and server.
   connection will be selected.
 
   The different signature algorithms are prioritized in the following
-  order: `eddsa`, `ecdsa`, `rsa_pss_pss`, `rsa`, and `dsa`. If more
+  order: `mldsa`, `slhdsa`, `eddsa`, `ecdsa`, `rsa_pss_pss`, `rsa`, and `dsa`. If more
   than one key is supplied for the same signature algorithm, they will
   be prioritized by strength (except for _engine keys_; see the next
   paragraph). This offers flexibility to, for instance, configure a
@@ -769,7 +779,7 @@ Common certificate related options to both client and server.
 
   > #### Note {: .info }
   >
-  > `eddsa` certificates are only supported by TLS-1.3 implementations that do not support `dsa`
+  > `mldsa`, `slhdsa`, `eddsa` certificates are only supported by TLS-1.3 implementations that do not support `dsa`
   > certificates. `rsa_pss_pss` (RSA certificates using Probabilistic Signature
   > Scheme) are supported in TLS-1.2 and TLS-1.3, but some TLS-1.2 implementations
   > do not support `rsa_pss_pss`.
@@ -924,6 +934,8 @@ Common certificate related options to both client and server.
 
   - **`best_effort`**
 
+    The `best_effort` check is a legacy behavior and must be considered insecure!
+
     If certificate revocation status cannot be determined it will be accepted as valid.
 
     The CA certificates specified for the connection will be used to construct the
@@ -954,15 +966,13 @@ Options common to client and server side prior to TLS-1.3.
 
   Elliptic curves that can be used in pre TLS-1.3 key exchange.
 
-- **`{secure_renegotiate, SecureRenegotiate}`** - Inter-operate trade-off option
+- **`{secure_renegotiate, SecureRenegotiate}`** - Previous interoperability option
 
-  Specifies whether to reject renegotiation attempt that does not live
-  up to [RFC 5746](http://www.ietf.org/rfc/rfc5746.txt). By default,
-  `SecureRenegotiate` is `true`, meaning that secure renegotiation is
-  enforced. If `SecureRenegotiate` is `false` secure renegotiation
-  will still be used if possible, but it falls back to insecure
-  renegotiation if the peer does not support if [RFC
-  5746](http://www.ietf.org/rfc/rfc5746.txt).
+ Since OTP 29.0 setting this option to false will fail, that is accepting
+ possible fallback to insecure behavior preceding implementation of
+ [RFC 5746](http://www.ietf.org/rfc/rfc5746.txt) is no longer supported.
+ Setting it to true will continue to work but is not necessary, as the default
+ of `true` will now always be enforced.
 
 - **`{user_lookup_fun, {LookupFun, UserState}}`** - PSK/SRP cipher suite option
 
@@ -989,7 +999,7 @@ Options common to client and server side prior to TLS-1.3.
 """.
 
 -type common_option_pre_tls13() :: {eccs, NamedCurves::[named_curve()]} |
-                                   {secure_renegotiate, SecureRenegotiate::boolean()} |
+                                   {secure_renegotiate, SecureRenegotiate::true} |
                                    {user_lookup_fun, {Lookupfun :: fun(), UserState :: any()}}.
 
 -doc(#{group => 
@@ -1392,7 +1402,7 @@ The following options are specific to the client side, or have
 different semantics for the client and server:
 
 - **`{psk_groups, Groups}`** - key exchange groups that the client
-will send pre share keys for, defaults to first group in
+will send pre shared keys for, defaults to the first group in
 supported_groups. Must be a subset of supported_groups and will
 be sent in the same order as they appear in supported_groups.
 
@@ -1428,24 +1438,6 @@ be sent in the same order as they appear in supported_groups.
 -doc """
 Certificate-related options specific to the client side, or with
 different semantics for the client and server.
-
-- **`{verify, Verify}`** - Verification of certificates
-
-  This option specifies whether certificates are to be verified.
-
-  If `Verify` is `verify_peer`, which is the default, it is required
-  to also provide one of the options `cacerts` or `cacertfile` in
-  order for the certificate verification to succeed. For example, an
-  HTTPS client can use option `{cacerts, public_key:cacerts_get()}` to
-  use the trusted CA certificates provided by the operating system.
-
-  If `Verify` is `verify_none`, all X.509-certificate path
-  validation errors will be ignored.
-
-  > #### Change {: .info }
-  >
-  > The default for `Verify` was changed to `verify_peer` in
-  > Erlang/OTP 26.
 
 - **`{cacerts, CACerts}`** - Trusted certificates
 
@@ -1550,8 +1542,7 @@ different semantics for the client and server.
   > a `{missing, ocsp_nonce}` logger event.
 """.
 
--type client_option_cert() :: {verify, Verify ::verify_peer | verify_none} |
-                              {cacerts,  CACerts::[public_key:der_encoded()] | [public_key:combined_cert()]} |
+-type client_option_cert() :: {cacerts,  CACerts::[public_key:der_encoded()] | [public_key:combined_cert()]} |
                               {cacertfile, CACertFile::file:filename()} |
                               {server_name_indication, SNI::inet:hostname() | disable} |
                               {customize_hostname_check, HostNameCheckOpts::list()} |
@@ -1754,6 +1745,27 @@ Common options to client and server only valid for DTLS.
 -doc """
 Legacy client options.
 
+- **`{verify, Verify}`** - Verification of certificates
+
+   Clients should always verify the servers certificate, this legacy
+   option should only be used for test or debug purposes.
+
+   This option specifies whether certificates are to be verified.
+
+  If `Verify` is `verify_peer`, which is the default, it is required
+  to also provide one of the options `cacerts` or `cacertfile` in
+  order for the certificate verification to succeed. For example, an
+  HTTPS client can use option `{cacerts, public_key:cacerts_get()}` to
+  use the trusted CA certificates provided by the operating system.
+
+  If `Verify` is `verify_none`, all X.509-certificate path
+  validation errors will be ignored.
+
+  > #### Change {: .info }
+  >
+  > The default for `Verify` was changed to `verify_peer` in
+  > Erlang/OTP 26.0.
+
 - **`{client_preferred_next_protocols, NextAppProtocols}`** - Next Protocol Negotiation
 
   ALPN (Application-Layer Protocol Negotiation)
@@ -1776,6 +1788,7 @@ Legacy client options.
   if no default protocol is supplied.
 """.
 -type client_option_legacy() ::
+        {verify, Verify ::verify_peer | verify_none} |
         {client_preferred_next_protocols, NextAppProtocols:: {Precedence :: server | client,
                                                               ClientPrefs :: [AppProto::binary()]} |
                                                              {Precedence :: server | client,
@@ -1801,6 +1814,11 @@ Options specific to the server side, or with different semantics for the client 
 
   The negotiated protocol can be retrieved using the
   [`negotiated_protocol/1`](`negotiated_protocol/1`) function.
+
+- **`{honor_cipher_order, HonorServerCipherOrder}`** - Trade-off option alters protocol defined behavior
+
+  If `true`, use the server's preference for cipher suite  selection. If `false` (the
+  default), use the client's preference.
 
 - **`{sni_fun, SNIFun}`**
 
@@ -1831,6 +1849,7 @@ Options specific to the server side, or with different semantics for the client 
 -type server_option() ::
         server_option_cert() |
         common_option_cert() |
+        {honor_cipher_order, HonorServerCipherOrder::boolean()} |
         {alpn_preferred_protocols,  AppProtocols::[binary()]}|
         {sni_hosts, SNIHosts::[{inet:hostname(), [server_option() | common_option()]}]} |
         {sni_fun, SNIFun:: fun((string()) -> [server_option() | common_option()] | 'unrecognized' | 'undefined')} |
@@ -1858,14 +1877,6 @@ Certificate related options for a server.
   client. When using `verify_peer` you may also want to specify the options
   `fail_if_no_peer_cert` and `certificate_authorities`.
 
-- **`{fail_if_no_peer_cert, FailNoPeerCert}`** - Legacy trade-off option
-
-  Used together with `{verify, verify_peer}` by an TLS/DTLS server. If set to
-  `true`, the server fails if the client does not have a certificate to send, that
-  is, sends an empty certificate. If set to `false`, it fails only if the client
-  sends an invalid certificate (an empty certificate is considered valid).
-  Defaults to `true`, the default value was changed in OTP-26.0.
-
 - **`{certificate_authorities, ServerCertAuth}`** - Inter-operate hint option
 
   Determines whether a TLS-1.3 server should include the authorities extension in its
@@ -1884,10 +1895,10 @@ Certificate related options for a server.
 """.
 
 -doc(#{group => <<"Server Options">>}).
--type server_option_cert() :: {cacerts,  CACerts::[public_key:der_encoded()] | [public_key:combined_cert()]} |
+-type server_option_cert() :: {cacerts,  CACerts::[public_key:der_encoded()] |
+                                                  [public_key:combined_cert()]} |
                               {cacertfile,  CACertFile::file:filename()} |
                               {verify, Verify:: verify_none | verify_peer} |
-                              {fail_if_no_peer_cert, FailNoPeerCert::boolean()} |
                               {certificate_authorities, ServerCertAuth::boolean()}.
 
 
@@ -1930,11 +1941,6 @@ Options only relevant to TLS versions prior to TLS-1.3.
 
   Specifies the server identity hint that the server presents to the client.
 
-- **`{honor_cipher_order, HonorServerCipherOrder}`** - Trade-off option alters protocol defined behavior
-
-  If `true`, use the server's preference for ECC curve selection. If `false` (the
-  default), use the client's preference.
-
 - **`{honor_ecc_order, HonorServerECCOrder}`** - Trade-off option alters protocol defined behavior
 
   If `true`, use the server's preference for ECC curve selection. If `false` (the
@@ -1955,7 +1961,6 @@ Options only relevant to TLS versions prior to TLS-1.3.
         {client_renegotiation, ClientRengotiation::boolean()}|
         {reuse_sessions, ReuseSessions::boolean()} |
         {reuse_session, ReuseSession::fun()} |
-        {honor_cipher_order, HonorServerCipherOrder::boolean()} |
         {honor_ecc_order, HonorServerECCOrder::boolean()} |
         {dh, DHDer::public_key:der_encoded()} |
         {dhfile,  DhFile::file:filename()} |
@@ -2079,8 +2084,18 @@ Legacy server options.
   this list. The list of protocols must not contain an empty binary. If the server
   negotiates a Next Protocol, it can be accessed using the
   `negotiated_protocol/1` method.
+
+- **`{fail_if_no_peer_cert, FailNoPeerCert}`** - Legacy trade-off option
+
+  Used together with `{verify, verify_peer}` by an TLS/DTLS server. If set to
+  `true`, the server fails if the client does not have a certificate to send, that
+  is, sends an empty certificate. If set to `false`, it fails only if the client
+  sends an invalid certificate (an empty certificate is considered valid).
+  Defaults to `true`, the default value was changed in OTP 26.0.
+
 """.
 -type server_option_legacy() ::
+        {fail_if_no_peer_cert, FailNoPeerCert::boolean()} |
         {next_protocols_advertised, NextAppProtocols::[binary()]}.
 
 
@@ -3047,25 +3062,29 @@ Example:
 
 ```erlang
 1> ssl:signature_algs(default, 'tlsv1.3').
-[eddsa_ed25519,eddsa_ed448,ecdsa_secp521r1_sha512,
- ecdsa_secp384r1_sha384,ecdsa_secp256r1_sha256,
- ecdsa_brainpoolP512r1tls13_sha512,
- ecdsa_brainpoolP384r1tls13_sha384,
- ecdsa_brainpoolP256r1tls13_sha256,rsa_pss_pss_sha512,
- rsa_pss_pss_sha384,rsa_pss_pss_sha256,rsa_pss_rsae_sha512,
- rsa_pss_rsae_sha384,rsa_pss_rsae_sha256,mldsa44,mldsa65,
- mldsa87,rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256,
+[mldsa87,mldsa65,mldsa44,slh_dsa_shake_256f,slh_dsa_shake_256s,
+ slh_dsa_sha2_256f,slh_dsa_sha2_256s,slh_dsa_shake_192f,slh_dsa_shake_192s,
+ slh_dsa_sha2_192f,slh_dsa_sha2_192s,slh_dsa_shake_128f,slh_dsa_shake_128s,
+ slh_dsa_sha2_128f,slh_dsa_sha2_128s,eddsa_ed25519,eddsa_ed448,
+ ecdsa_secp521r1_sha512,ecdsa_secp384r1_sha384,ecdsa_secp256r1_sha256,
+ ecdsa_brainpoolP512r1tls13_sha512,ecdsa_brainpoolP384r1tls13_sha384,
+ ecdsa_brainpoolP256r1tls13_sha256,rsa_pss_pss_sha512,rsa_pss_pss_sha384,
+ rsa_pss_pss_sha256,rsa_pss_rsae_sha512,rsa_pss_rsae_sha384,
+ rsa_pss_rsae_sha256,rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256,
  {sha512,ecdsa},
  {sha384,ecdsa},
- {sha256,ecdsa}]
+ {sha256,ecdsa}].
 
 2> ssl:signature_algs(all, 'tlsv1.3').
-[eddsa_ed25519,eddsa_ed448,ecdsa_secp521r1_sha512,ecdsa_secp384r1_sha384,
- ecdsa_secp256r1_sha256,ecdsa_brainpoolP512r1tls13_sha512,
- ecdsa_brainpoolP384r1tls13_sha384,ecdsa_brainpoolP256r1tls13_sha256,
- rsa_pss_pss_sha512,rsa_pss_pss_sha384,rsa_pss_pss_sha256,rsa_pss_rsae_sha512,
- rsa_pss_rsae_sha384,rsa_pss_rsae_sha256,mldsa44,mldsa65,mldsa87,
- rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256,
+[mldsa87,mldsa65,mldsa44,slh_dsa_shake_256f,slh_dsa_shake_256s,
+ slh_dsa_sha2_256f,slh_dsa_sha2_256s,slh_dsa_shake_192f,slh_dsa_shake_192s,
+ slh_dsa_sha2_192f,slh_dsa_sha2_192s,slh_dsa_shake_128f,slh_dsa_shake_128s,
+ slh_dsa_sha2_128f,slh_dsa_sha2_128s,eddsa_ed25519,eddsa_ed448,
+ ecdsa_secp521r1_sha512,ecdsa_secp384r1_sha384,ecdsa_secp256r1_sha256,
+ ecdsa_brainpoolP512r1tls13_sha512,ecdsa_brainpoolP384r1tls13_sha384,
+ ecdsa_brainpoolP256r1tls13_sha256,rsa_pss_pss_sha512,rsa_pss_pss_sha384,
+ rsa_pss_pss_sha256,rsa_pss_rsae_sha512,rsa_pss_rsae_sha384,
+ rsa_pss_rsae_sha256,rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256,
  {sha512,ecdsa},
  {sha384,ecdsa},
  {sha256,ecdsa},
@@ -3078,15 +3097,15 @@ Example:
  {sha,dsa}]
 
 3> [ssl:signature_algs(exclusive, 'tlsv1.3').
-[eddsa_ed25519,eddsa_ed448,ecdsa_secp521r1_sha512,ecdsa_secp384r1_sha384,
- ecdsa_secp256r1_sha256,ecdsa_brainpoolP512r1tls13_sha512,
- ecdsa_brainpoolP384r1tls13_sha384,ecdsa_brainpoolP256r1tls13_sha256,
- rsa_pss_pss_sha512,rsa_pss_pss_sha384,rsa_pss_pss_sha256,rsa_pss_rsae_sha512,
- rsa_pss_rsae_sha384,rsa_pss_rsae_sha256,mldsa44,mldsa65,mldsa87,
- rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256,slh_dsa_shake_256f,
- slh_dsa_shake_256s,slh_dsa_sha2_256f,slh_dsa_sha2_256s,slh_dsa_shake_192f,
- slh_dsa_shake_192s,slh_dsa_sha2_192f,slh_dsa_sha2_192s,slh_dsa_shake_128f,
- slh_dsa_shake_128s,slh_dsa_sha2_128f,slh_dsa_sha2_128s]
+[mldsa87,mldsa65,mldsa44,slh_dsa_shake_256f,slh_dsa_shake_256s,
+ slh_dsa_sha2_256f,slh_dsa_sha2_256s,slh_dsa_shake_192f,slh_dsa_shake_192s,
+ slh_dsa_sha2_192f,slh_dsa_sha2_192s,slh_dsa_shake_128f,slh_dsa_shake_128s,
+ slh_dsa_sha2_128f,slh_dsa_sha2_128s,eddsa_ed25519,eddsa_ed448,
+ ecdsa_secp521r1_sha512,ecdsa_secp384r1_sha384,ecdsa_secp256r1_sha256,
+ ecdsa_brainpoolP512r1tls13_sha512,ecdsa_brainpoolP384r1tls13_sha384,
+ ecdsa_brainpoolP256r1tls13_sha256,rsa_pss_pss_sha512,rsa_pss_pss_sha384,
+ rsa_pss_pss_sha256,rsa_pss_rsae_sha512,rsa_pss_rsae_sha384,
+ rsa_pss_rsae_sha256,rsa_pkcs1_sha512,rsa_pkcs1_sha384,rsa_pkcs1_sha256]
 ```
 
 > #### Note {: .info }
@@ -3112,15 +3131,13 @@ signature_algs(default, 'tlsv1.2') ->
 signature_algs(all, 'tlsv1.3') ->
     tls_v1:default_signature_algs([tls_record:protocol_version_name('tlsv1.3'),
                                    tls_record:protocol_version_name('tlsv1.2')]) ++
-        tls_v1:slh_dsa_schemes() ++
         [ecdsa_sha1, rsa_pkcs1_sha1 | tls_v1:legacy_signature_algs_pre_13()] --
         [{sha, ecdsa}, {sha, rsa}];
 signature_algs(all, 'tlsv1.2') ->
     tls_v1:default_signature_algs([tls_record:protocol_version_name('tlsv1.2')]) ++
         tls_v1:legacy_signature_algs_pre_13();
 signature_algs(exclusive, 'tlsv1.3') ->
-    tls_v1:default_signature_algs([tls_record:protocol_version_name('tlsv1.3')]) ++
-        tls_v1:slh_dsa_schemes();
+    tls_v1:default_signature_algs([tls_record:protocol_version_name('tlsv1.3')]);
 signature_algs(exclusive, 'tlsv1.2') ->
     Algs = tls_v1:default_signature_algs([tls_record:protocol_version_name('tlsv1.2')]),
     Algs ++ tls_v1:legacy_signature_algs_pre_13();
@@ -3178,7 +3195,7 @@ eccs(Other) ->
 -doc """
 Returns all supported groups in TLS 1.3.
 
-Existed since OTP 22.0; documented as of OTP 27.
+Existed since OTP 22.0; documented as of OTP 27.0.
 """.
 -spec groups() -> [group()].
 %%--------------------------------------------------------------------
@@ -3193,7 +3210,7 @@ groups() ->
 -doc """
 Returns default supported groups in TLS 1.3.
 
-Existed since OTP 22.0; documented as of OTP 27.
+Existed since OTP 22.0; documented as of OTP 27.0.
 """.
 
 %%--------------------------------------------------------------------

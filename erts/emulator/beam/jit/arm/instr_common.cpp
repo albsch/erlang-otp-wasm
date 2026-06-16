@@ -859,7 +859,7 @@ void BeamModuleAssembler::emit_copy_words_increment(a64::Gp from,
     } else {
         Label copy_next = a.new_label();
 
-        ASSERT(Support::isUInt16(count / 4));
+        ASSERT(Support::is_uint_n<16>(count / 4));
         mov_imm(SUPER_TMP, count / 4);
         a.bind(copy_next);
         {
@@ -1103,6 +1103,11 @@ void BeamModuleAssembler::emit_update_record_in_place(
 void BeamModuleAssembler::emit_set_tuple_element(const ArgSource &Element,
                                                  const ArgRegister &Tuple,
                                                  const ArgWord &Offset) {
+    /* TODO: As of Erlang/OTP 29, this instruction is no longer
+     * emitted by the compiler. It can be removed when the runtime
+     * system no longer supports loading code compiled by Erlang/OTP
+     * 28 or earlier. */
+
     auto tuple = load_source(Tuple, TMP1);
     auto element = load_source(Element, TMP2);
     a64::Gp boxed_ptr = emit_ptr_val(TMP1, tuple.reg);

@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 1996-2025. All Rights Reserved.
+%% Copyright Ericsson AB 1996-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -480,12 +480,15 @@ grammar for Erlang.
 lib/parsetools/include/yeccpre.hrl
 ```
 
-## See Also
+### See Also
 
 * Aho & Johnson: 'LR Parsing', ACM Computing Surveys, vol. 6:2, 1974.
 
 * Kernighan & Pike: The UNIX programming environment, 1984.
 """.
+
+-compile([{nowarn_possibly_unsafe_function, {erlang, list_to_atom, 1}},
+          {nowarn_unsafe_function, {os, cmd, 1}}]).
 
 -export([compile/3, file/1, file/2, format_error/1]).
 
@@ -1487,7 +1490,7 @@ check_expected(St0) ->
           end,
     NStates = NStates0 + 1,
     if
-        (not Done) or (ExpStates =:= []) or (NStates =:= ExpStates) ->
+        not Done; ExpStates =:= []; NStates =:= ExpStates ->
             St1;
         true ->
             add_warning(none, {n_states, ExpStates, NStates}, St1)
@@ -2415,7 +2418,8 @@ select_parts(PartDataL) ->
             NL = [D#part_data{states = NewS} || 
                      {W1, #part_data{states = S0}=D} <- Ws,
                      W1 > 0,
-                     (NewS = ordsets:subtract(S0, S)) =/= []],
+                     NewS <- [ordsets:subtract(S0, S)],
+                     NewS =/= []],
             if 
                 length(S) =:= 1; NActions =:= 1 ->
                     select_parts(NL);

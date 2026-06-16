@@ -25,7 +25,7 @@
 {application, erl_interface,
  [
   {description, "Erl Interface"},
-  {vsn, "5.7"},
+  {vsn, "5.8.1"},
   {modules, []},
   {registered, []},
   {applications, []},

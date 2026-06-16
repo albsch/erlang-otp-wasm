@@ -3,7 +3,7 @@
 %%
 %% SPDX-License-Identifier: Apache-2.0
 %%
-%% Copyright Ericsson AB 2008-2025. All Rights Reserved.
+%% Copyright Ericsson AB 2008-2026. All Rights Reserved.
 %%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
@@ -231,7 +231,9 @@ init_per_group(Tag, Algs, Alg, PA, Config) ->
             end;
 
         _ ->
-            start_std_daemon([PrefAlgs],
+            start_std_daemon([{exec, erlang_eval},
+                              {subsystems, [ssh_sftpd:subsystem_spec([])]}
+                              | [PrefAlgs]],
                              [{pref_algs,PrefAlgs},
                               {tag_alg,{Tag,[Alg]}}
                               | Config])
